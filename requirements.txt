@@ -1,0 +1,13 @@
+langchain
+openai
+python-telegram-bot
+PyMuPDF
+faiss-cpu
+python-dotenv
+psycopg2
+python-docx
+pandas
+openpyxl
+tiktoken
+langchain-community
+langchain-openai
