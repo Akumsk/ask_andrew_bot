@@ -10,7 +10,7 @@ from langchain_community.document_loaders import PyMuPDFLoader
 from langchain.text_splitter import CharacterTextSplitter
 from langchain.chains import RetrievalQA
 from langchain.schema import Document
-
+import tiktoken
 from settings import OPENAI_API_KEY, MODEL_NAME
 
 
@@ -93,6 +93,42 @@ class LLMService:
         except Exception as e:
             return f"An error occurred: {str(e)}", None
 
-    def count_tokens_in_documents(self, folder_path):
-        # Implement token counting if needed
-        return 0  # Placeholder
+    def count_tokens_in_context(self, folder_path):
+        """Counts the total number of tokens in documents within a folder."""
+        documents = []
+        found_valid_file = False
+
+        for filename in os.listdir(folder_path):
+            file_path = os.path.join(folder_path, filename)
+
+            if filename.endswith(".pdf"):
+                loader = PyMuPDFLoader(file_path)
+                docs = loader.load()
+                for doc in docs:
+                    doc.metadata = {"source": filename}
+                    documents.append(doc)
+                found_valid_file = True
+
+            elif filename.endswith(".docx"):
+                content = self.load_word_file(file_path)
+                doc = Document(page_content=content, metadata={"source": filename})
+                documents.append(doc)
+                found_valid_file = True
+
+            elif filename.endswith(".xlsx"):
+                content = self.load_excel_file(file_path)
+                doc = Document(page_content=content, metadata={"source": filename})
+                documents.append(doc)
+                found_valid_file = True
+
+        if not found_valid_file:
+            return "No valid files found in the folder. Please provide PDF, Word, or Excel files."
+
+        # Count tokens in the documents
+        tokenizer = tiktoken.encoding_for_model('gpt-4')  # Tokenizer for the specific model
+
+        total_tokens = 0
+        for doc in documents:
+            total_tokens += len(tokenizer.encode(doc.page_content))
+
+        return total_tokens

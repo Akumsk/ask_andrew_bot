@@ -13,7 +13,7 @@ from settings import TELEGRAM_TOKEN
 from llm_service import LLMService
 from db_service import DatabaseService
 from handlers import BotHandlers, WAITING_FOR_FOLDER_PATH, WAITING_FOR_QUESTION, WAITING_FOR_PROJECT_SELECTION
-
+from exception_handlers import error_handler
 
 def main():
     logging.basicConfig(level=logging.INFO)
@@ -70,7 +70,7 @@ def main():
         MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.handle_message)
     )
 
-    application.add_error_handler(handlers.error_handler)
+    application.add_error_handler(error_handler)
 
     application.run_polling()
 

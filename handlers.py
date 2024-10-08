@@ -18,7 +18,6 @@ class BotHandlers:
         self.db_service = db_service
 
     async def post_init(self, application):
-        """Set up bot commands after initialization."""
         commands = [
             BotCommand("start", "Display introduction message"),
             BotCommand("folder", "Set folder path for documents"),
@@ -30,11 +29,9 @@ class BotHandlers:
         await application.bot.set_my_commands(commands)
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle the /start command."""
         user_id = update.effective_user.id
         user_name = update.effective_user.full_name
 
-        # Initialize user-specific data
         context.user_data['folder_path'] = ""
         context.user_data['vector_store_loaded'] = False
         context.user_data['valid_files_in_folder'] = []
@@ -62,7 +59,7 @@ class BotHandlers:
                 context.user_data['vector_store_loaded'] = True
 
                 # Evaluate token count
-                token_count = self.llm_service.count_tokens_in_documents(last_folder)
+                token_count = self.llm_service.count_tokens_in_context(last_folder)
                 percentage_full = (token_count / MAX_TOKENS) * 100 if MAX_TOKENS else 0
                 percentage_full = min(percentage_full, 100)
 
@@ -140,7 +137,7 @@ class BotHandlers:
             context.user_data['vector_store_loaded'] = True
 
             # Evaluate token count
-            token_count = self.llm_service.count_tokens_in_documents(folder_path)
+            token_count = self.llm_service.count_tokens_in_context(folder_path)
             percentage_full = (token_count / MAX_TOKENS) * 100 if MAX_TOKENS else 0
             percentage_full = min(percentage_full, 100)
 
@@ -180,7 +177,7 @@ class BotHandlers:
                 )
 
                 # Evaluate token count
-                token_count = self.llm_service.count_tokens_in_documents(folder_path)
+                token_count = self.llm_service.count_tokens_in_context(folder_path)
                 percentage_full = (token_count / MAX_TOKENS) * 100 if MAX_TOKENS else 0
                 percentage_full = min(percentage_full, 100)
 
@@ -238,7 +235,7 @@ class BotHandlers:
         context.user_data['vector_store_loaded'] = True
 
         # Evaluate token count
-        token_count = self.llm_service.count_tokens_in_documents(folder_path)
+        token_count = self.llm_service.count_tokens_in_context(folder_path)
         percentage_full = (token_count / MAX_TOKENS) * 100 if MAX_TOKENS else 0
         percentage_full = min(percentage_full, 100)
 
@@ -288,7 +285,7 @@ class BotHandlers:
         context.user_data['vector_store_loaded'] = True
 
         # Evaluate token count
-        token_count = self.llm_service.count_tokens_in_documents(folder_path)
+        token_count = self.llm_service.count_tokens_in_context(folder_path)
         percentage_full = (token_count / MAX_TOKENS) * 100 if MAX_TOKENS else 0
         percentage_full = min(percentage_full, 100)
 
@@ -375,11 +372,3 @@ class BotHandlers:
             reference_message = "No document references found."
 
         await update.message.reply_text(f"{response}\n\nReferences:\n{reference_message}")
-
-    async def error_handler(self, update: object, context: ContextTypes.DEFAULT_TYPE):
-        """Handle any errors that occur during updates."""
-        logging.error(msg="Exception while handling an update:", exc_info=context.error)
-        if update and update.effective_message:
-            await update.effective_message.reply_text(
-                "An unexpected error occurred. Please try again later."
-            )
