@@ -8,12 +8,13 @@ from telegram.ext import (
     ConversationHandler,
     filters,
 )
+from telegram.error import BadRequest
 
 from settings import TELEGRAM_TOKEN
 from llm_service import LLMService
 from db_service import DatabaseService
 from handlers import BotHandlers, WAITING_FOR_FOLDER_PATH, WAITING_FOR_QUESTION, WAITING_FOR_PROJECT_SELECTION
-from exception_handlers import error_handler
+from exception_handlers import error_handler, handle_telegram_context_length_exceeded_error
 
 def main():
     logging.basicConfig(level=logging.INFO)

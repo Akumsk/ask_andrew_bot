@@ -5,7 +5,7 @@ import os
 from telegram import Update, BotCommand
 from telegram.ext import ContextTypes, ConversationHandler
 
-from settings import PROJECT_PATHS, MAX_TOKENS, KNOWLEDGE_BASE_PATH
+from settings import PROJECT_PATHS, MAX_TOKENS_IN_CONTEXT, KNOWLEDGE_BASE_PATH
 from db_service import DatabaseService
 from llm_service import LLMService
 
@@ -60,7 +60,7 @@ class BotHandlers:
 
                 # Evaluate token count
                 token_count = self.llm_service.count_tokens_in_context(last_folder)
-                percentage_full = (token_count / MAX_TOKENS) * 100 if MAX_TOKENS else 0
+                percentage_full = (token_count / MAX_TOKENS_IN_CONTEXT) * 100 if MAX_TOKENS_IN_CONTEXT else 0
                 percentage_full = min(percentage_full, 100)
 
                 await update.message.reply_text(
@@ -138,7 +138,7 @@ class BotHandlers:
 
             # Evaluate token count
             token_count = self.llm_service.count_tokens_in_context(folder_path)
-            percentage_full = (token_count / MAX_TOKENS) * 100 if MAX_TOKENS else 0
+            percentage_full = (token_count / MAX_TOKENS_IN_CONTEXT) * 100 if MAX_TOKENS_IN_CONTEXT else 0
             percentage_full = min(percentage_full, 100)
 
             await update.message.reply_text(
@@ -178,7 +178,7 @@ class BotHandlers:
 
                 # Evaluate token count
                 token_count = self.llm_service.count_tokens_in_context(folder_path)
-                percentage_full = (token_count / MAX_TOKENS) * 100 if MAX_TOKENS else 0
+                percentage_full = (token_count / MAX_TOKENS_IN_CONTEXT) * 100 if MAX_TOKENS_IN_CONTEXT else 0
                 percentage_full = min(percentage_full, 100)
 
                 await update.message.reply_text(
@@ -236,7 +236,7 @@ class BotHandlers:
 
         # Evaluate token count
         token_count = self.llm_service.count_tokens_in_context(folder_path)
-        percentage_full = (token_count / MAX_TOKENS) * 100 if MAX_TOKENS else 0
+        percentage_full = (token_count / MAX_TOKENS_IN_CONTEXT) * 100 if MAX_TOKENS_IN_CONTEXT else 0
         percentage_full = min(percentage_full, 100)
 
         await update.message.reply_text(
@@ -286,7 +286,7 @@ class BotHandlers:
 
         # Evaluate token count
         token_count = self.llm_service.count_tokens_in_context(folder_path)
-        percentage_full = (token_count / MAX_TOKENS) * 100 if MAX_TOKENS else 0
+        percentage_full = (token_count / MAX_TOKENS_IN_CONTEXT) * 100 if MAX_TOKENS_IN_CONTEXT else 0
         percentage_full = min(percentage_full, 100)
 
         await update.message.reply_text(

@@ -80,7 +80,7 @@ class LLMService:
         )
 
         try:
-            result = qa_chain({"query": prompt})
+            result = qa_chain.invoke({"query": prompt})
             sources = result.get("source_documents", [])
             if not sources:
                 return result["result"], None
