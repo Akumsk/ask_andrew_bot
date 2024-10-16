@@ -357,14 +357,28 @@ class BotHandlers:
             return
 
         user_message = update.message.text
+
+        # Update chat history
+        chat_history = context.user_data.get('chat_history', [])
+        chat_history.append(("user", user_message))
+        if len(chat_history) > 10:  # Keep the last 5 exchanges (user and assistant)
+            chat_history = chat_history[-10:]
+        context.user_data['chat_history'] = chat_history
+
         try:
-            response, source_files = self.llm_service.retrieve_and_generate(user_message)
+            response, source_files = self.llm_service.retrieve_and_generate(user_message, chat_history=chat_history)
         except Exception as e:
             logging.error(f"Error during retrieve_and_generate: {e}")
             await update.message.reply_text(
                 "An error occurred while processing your message. Please try again later."
             )
             return
+
+        # Update chat history with assistant's response
+        chat_history.append(("assistant", response))
+        if len(chat_history) > 10:
+            chat_history = chat_history[-10:]
+        context.user_data['chat_history'] = chat_history
 
         if source_files:
             reference_message = "\n".join([f"Document: {file}" for file in source_files])
