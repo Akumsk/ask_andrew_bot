@@ -8,7 +8,7 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_community.document_loaders import PyMuPDFLoader
 from langchain.text_splitter import CharacterTextSplitter
-from langchain.chains import ConversationalRetrievalChain
+from langchain.chains import RetrievalQA, ConversationalRetrievalChain
 from langchain.schema import Document, HumanMessage, AIMessage
 import tiktoken
 from settings import OPENAI_API_KEY, MODEL_NAME
@@ -67,38 +67,28 @@ class LLMService:
         self.vector_store = FAISS.from_documents(split_docs, embeddings)
         return "Documents successfully indexed."
 
-    def retrieve_and_generate(self, prompt, chat_history=None):
+    def retrieve_and_generate(self, prompt):
         if not self.vector_store:
             return "Please set the folder path using /folder and ensure documents are loaded.", None
 
         retriever = self.vector_store.as_retriever()
 
-        # Convert chat_history to messages
-        messages = []
-        if chat_history:
-            for role, message in chat_history:
-                if role == "user":
-                    messages.append(HumanMessage(content=message))
-                elif role == "assistant":
-                    messages.append(AIMessage(content=message))
-
-        memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
-        memory.chat_memory.messages = messages
-
-        qa_chain = ConversationalRetrievalChain.from_llm(
+        qa_chain = RetrievalQA.from_chain_type(
             llm=self.llm,
             retriever=retriever,
-            memory=memory,
+            chain_type="stuff",
             return_source_documents=True
         )
 
         try:
-            result = qa_chain.invoke({"question": prompt})
-            response = result["answer"]
-            source_documents = result.get("source_documents", [])
+            result = qa_chain.invoke({"query": prompt})
+            sources = result.get("source_documents", [])
+            if not sources:
+                return result["result"], None
 
-            source_files = set([doc.metadata["source"] for doc in source_documents if "source" in doc.metadata])
+            source_files = set([doc.metadata["source"] for doc in sources if "source" in doc.metadata])
 
+            response = result["result"]
             return response, source_files
 
         except Exception as e:

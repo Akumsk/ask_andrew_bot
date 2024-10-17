@@ -2,7 +2,7 @@
 
 import logging
 import os
-from telegram import Update, BotCommand
+from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
 
 from settings import PROJECT_PATHS, MAX_TOKENS_IN_CONTEXT, KNOWLEDGE_BASE_PATH
@@ -93,13 +93,19 @@ class BotHandlers:
 
     async def projects(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the /projects command."""
-        projects_list = "\n".join([f"{key}" for key in PROJECT_PATHS])
-        await update.message.reply_text(f"Please select a project:\n{projects_list}")
+        keyboard = [
+            [InlineKeyboardButton(project_name, callback_data=project_name)]
+            for project_name in PROJECT_PATHS.keys()
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text('Please select a project:', reply_markup=reply_markup)
         return WAITING_FOR_PROJECT_SELECTION
 
-    async def handle_project_selection(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle project selection after /projects command."""
-        user_choice = update.message.text.strip()
+    async def handle_project_selection_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle project selection via callback data after /projects command."""
+        query = update.callback_query
+        await query.answer()
+        user_choice = query.data
 
         folder_path = PROJECT_PATHS.get(user_choice)
 
@@ -109,7 +115,7 @@ class BotHandlers:
 
             # Check if the folder path exists
             if not os.path.isdir(folder_path):
-                await update.message.reply_text("The selected project's folder path does not exist.")
+                await query.edit_message_text("The selected project's folder path does not exist.")
                 return ConversationHandler.END
 
             # Check for valid files
@@ -118,7 +124,7 @@ class BotHandlers:
                 if f.endswith((".pdf", ".docx", ".xlsx"))
             ]
             if not valid_files_in_folder:
-                await update.message.reply_text(
+                await query.edit_message_text(
                     "No valid files found in the selected project's folder."
                 )
                 return ConversationHandler.END
@@ -129,7 +135,7 @@ class BotHandlers:
             index_status = self.llm_service.load_and_index_documents(folder_path)
             if index_status != "Documents successfully indexed.":
                 logging.error(f"Error during load_and_index_documents: {index_status}")
-                await update.message.reply_text(
+                await query.edit_message_text(
                     "An error occurred while loading and indexing the project documents. Please try again later."
                 )
                 return ConversationHandler.END
@@ -141,7 +147,7 @@ class BotHandlers:
             percentage_full = (token_count / MAX_TOKENS_IN_CONTEXT) * 100 if MAX_TOKENS_IN_CONTEXT else 0
             percentage_full = min(percentage_full, 100)
 
-            await update.message.reply_text(
+            await query.edit_message_text(
                 f"Project folder path set to: {folder_path}\n\nValid files have been indexed.\n\n"
                 f"Context storage is {percentage_full:.2f}% full."
             )
@@ -149,7 +155,7 @@ class BotHandlers:
             # Save user info in database
             self.db_service.add_user_to_db(user_id=user_id, user_name=user_name, folder=folder_path)
         else:
-            await update.message.reply_text(
+            await query.edit_message_text(
                 "Invalid selection or project is not available. Please select a valid project."
             )
             return ConversationHandler.END
@@ -357,28 +363,14 @@ class BotHandlers:
             return
 
         user_message = update.message.text
-
-        # Update chat history
-        chat_history = context.user_data.get('chat_history', [])
-        chat_history.append(("user", user_message))
-        if len(chat_history) > 10:  # Keep the last 5 exchanges (user and assistant)
-            chat_history = chat_history[-10:]
-        context.user_data['chat_history'] = chat_history
-
         try:
-            response, source_files = self.llm_service.retrieve_and_generate(user_message, chat_history=chat_history)
+            response, source_files = self.llm_service.retrieve_and_generate(user_message)
         except Exception as e:
             logging.error(f"Error during retrieve_and_generate: {e}")
             await update.message.reply_text(
                 "An error occurred while processing your message. Please try again later."
             )
             return
-
-        # Update chat history with assistant's response
-        chat_history.append(("assistant", response))
-        if len(chat_history) > 10:
-            chat_history = chat_history[-10:]
-        context.user_data['chat_history'] = chat_history
 
         if source_files:
             reference_message = "\n".join([f"Document: {file}" for file in source_files])

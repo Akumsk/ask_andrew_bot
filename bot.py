@@ -7,6 +7,7 @@ from telegram.ext import (
     MessageHandler,
     ConversationHandler,
     filters,
+    CallbackQueryHandler,
 )
 from telegram.error import BadRequest
 
@@ -55,7 +56,7 @@ def main():
         entry_points=[CommandHandler('projects', handlers.projects)],
         states={
             WAITING_FOR_PROJECT_SELECTION: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.handle_project_selection)
+                CallbackQueryHandler(handlers.handle_project_selection_callback)
             ],
         },
         fallbacks=[]
