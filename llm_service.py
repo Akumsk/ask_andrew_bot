@@ -4,6 +4,9 @@ import os
 import pandas as pd
 from io import StringIO
 from docx import Document as DocxDocument
+from langchain.chains.history_aware_retriever import create_history_aware_retriever
+from langchain.chains.retrieval import create_retrieval_chain
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_community.document_loaders import PyMuPDFLoader
@@ -12,7 +15,7 @@ from langchain.chains import RetrievalQA, ConversationalRetrievalChain
 from langchain.schema import Document, HumanMessage, AIMessage
 import tiktoken
 from settings import OPENAI_API_KEY, MODEL_NAME
-from langchain.memory import ConversationBufferMemory
+from langchain.chains.combine_documents import create_stuff_documents_chain
 
 
 class LLMService:
@@ -93,6 +96,61 @@ class LLMService:
 
         except Exception as e:
             return f"An error occurred: {str(e)}", None
+
+    def generate_response (self, prompt):
+        def create_chain(vectorStore):
+            model = self.llm
+
+            prompt = ChatPromptTemplate.from_messages(
+                [
+                    (
+                        "system",
+                        "Answer the user's questions based on the context: {context}",
+                    ),
+                    MessagesPlaceholder(variable_name="chat_history"),
+                    ("user", "{input}"),
+                ]
+            )
+
+            chain = create_stuff_documents_chain(llm=model, prompt=prompt)
+
+            # Replace retriever with history aware retriever
+            retriever = self.vector_store.as_retriever()
+
+            retriever_prompt = ChatPromptTemplate.from_messages(
+                [
+                    MessagesPlaceholder(variable_name="chat_history"),
+                    ("user", "{input}"),
+                    (
+                        "user",
+                        "Given the above conversation, generate a search query to look up in order to get information relevant to the conversation",
+                    ),
+                ]
+            )
+            history_aware_retriever = create_history_aware_retriever(
+                llm=model, retriever=retriever, prompt=retriever_prompt
+            )
+
+            retrieval_chain = create_retrieval_chain(
+                # retriever, Replace with History Aware Retriever
+                history_aware_retriever,
+                chain,
+            )
+
+            return retrieval_chain
+
+        vectorStore = self.vector_store
+        chain = create_chain(vectorStore)
+
+        chat_history = get_chat_history_from_tg(user_id=user_id)
+        response = chain.invoke(
+            {
+                "chat_history": chat_history,
+                "input": question,
+            }
+        )
+
+        return response["answer"]
 
     def count_tokens_in_context(self, folder_path):
         """Counts the total number of tokens in documents within a folder."""
