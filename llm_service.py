@@ -70,7 +70,8 @@ class LLMService:
         self.vector_store = FAISS.from_documents(split_docs, embeddings)
         return "Documents successfully indexed."
 
-    def retrieve_and_generate(self, prompt):
+    #deprecated need to refactor def generate_response
+    def retrieve_and_generate_temp(self, prompt):
         if not self.vector_store:
             return "Please set the folder path using /folder and ensure documents are loaded.", None
 
@@ -96,61 +97,96 @@ class LLMService:
 
         except Exception as e:
             return f"An error occurred: {str(e)}", None
-
+    #new function instead of retrieve_and_generate
     def generate_response (self, prompt):
-        def create_chain(vectorStore):
-            model = self.llm
 
-            prompt = ChatPromptTemplate.from_messages(
-                [
-                    (
-                        "system",
-                        "Answer the user's questions based on the context: {context}",
-                    ),
-                    MessagesPlaceholder(variable_name="chat_history"),
-                    ("user", "{input}"),
-                ]
-            )
+        # Function to retrieve chat history messages by user ID
+        def get_chat_history_from_tg():
+            # Implement your logic to retrieve chat history from your database or storage
+            chat_history = []
+            return chat_history
 
-            chain = create_stuff_documents_chain(llm=model, prompt=prompt)
+        # Create the retriever
+        retriever = self.vector_store.as_retriever()
 
-            # Replace retriever with history aware retriever
-            retriever = self.vector_store.as_retriever()
+        # Create the history-aware retriever
+        retriever_prompt = ChatPromptTemplate.from_messages(
+            [
+                MessagesPlaceholder(variable_name="chat_history"),
+                ("user", "{input}"),
+                (
+                    "user",
+                    "Given the above conversation, generate a search query to look up in order to get information relevant to the conversation",
+                ),
+            ]
+        )
 
-            retriever_prompt = ChatPromptTemplate.from_messages(
-                [
-                    MessagesPlaceholder(variable_name="chat_history"),
-                    ("user", "{input}"),
-                    (
-                        "user",
-                        "Given the above conversation, generate a search query to look up in order to get information relevant to the conversation",
-                    ),
-                ]
-            )
-            history_aware_retriever = create_history_aware_retriever(
-                llm=model, retriever=retriever, prompt=retriever_prompt
-            )
+        history_aware_retriever = create_history_aware_retriever(
+            llm=self.llm, retriever=retriever, prompt=retriever_prompt
+        )
 
-            retrieval_chain = create_retrieval_chain(
-                # retriever, Replace with History Aware Retriever
-                history_aware_retriever,
-                chain,
-            )
+        # Create the question-answering chain
+        system_prompt = (
+            "You are an assistant for question-answering tasks. "
+            "Use the following pieces of retrieved context to answer "
+            "the question. If you don't know the answer, say that you "
+            "don't know. Use three sentences maximum and keep the "
+            "answer concise.\n\n{context}"
+        )
 
-            return retrieval_chain
+        prompt_template = ChatPromptTemplate.from_messages(
+            [
+                ("system", system_prompt),
+                MessagesPlaceholder(variable_name="chat_history"),
+                ("user", "{input}"),
+            ]
+        )
 
-        vectorStore = self.vector_store
-        chain = create_chain(vectorStore)
+        question_answer_chain = create_stuff_documents_chain(self.llm, prompt_template)
 
-        chat_history = get_chat_history_from_tg(user_id=user_id)
+        # Create the retrieval chain using create_retrieval_chain
+        rag_chain = create_retrieval_chain(
+            retriever=history_aware_retriever,
+            combine_docs_chain=question_answer_chain
+        )
+
+        chat_history = get_chat_history_from_tg()
+
+        # Run the chain with the provided prompt and chat history
+        result = rag_chain.invoke({
+            "input": prompt,
+            "chat_history": chat_history
+        })
+
+        answer = result.get("answer", "")
+        sources = result.get("context", [])
+
+        if not sources:
+            return answer, None
+
+        source_files = set([doc.metadata["source"] for doc in sources if "source" in doc.metadata])
+
+        return answer, source_files
+
+
+        chain = create_chain(self.vector_store)
+        chat_history = get_chat_history_from_tg()
         response = chain.invoke(
             {
                 "chat_history": chat_history,
-                "input": question,
+                "input": prompt,
             }
         )
 
-        return response["answer"]
+        answer = response.get("answer", "")
+        sources = response.get("source_documents", [])
+
+        if not sources:
+            return answer, None
+
+        source_files = set([doc.metadata["source"] for doc in sources if "source" in doc.metadata])
+
+        return answer, source_files
 
     def count_tokens_in_context(self, folder_path):
         """Counts the total number of tokens in documents within a folder."""

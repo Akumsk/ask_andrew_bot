@@ -325,9 +325,9 @@ class BotHandlers:
         """Process the user's question and provide an answer."""
         user_prompt = update.message.text
         try:
-            response, source_files = self.llm_service.retrieve_and_generate(user_prompt)
+            response, source_files = self.llm_service.generate_response(user_prompt)
         except Exception as e:
-            logging.error(f"Error during retrieve_and_generate: {e}")
+            logging.error(f"Error during generate_response: {e}")
             await update.message.reply_text(
                 "An error occurred while processing your question. Please try again later."
             )
@@ -364,9 +364,9 @@ class BotHandlers:
 
         user_message = update.message.text
         try:
-            response, source_files = self.llm_service.retrieve_and_generate(user_message)
+            response, source_files = self.llm_service.generate_response(user_message)
         except Exception as e:
-            logging.error(f"Error during retrieve_and_generate: {e}")
+            logging.error(f"Error during generate_response: {e}")
             await update.message.reply_text(
                 "An error occurred while processing your message. Please try again later."
             )
@@ -378,3 +378,4 @@ class BotHandlers:
             reference_message = "No document references found."
 
         await update.message.reply_text(f"{response}\n\nReferences:\n{reference_message}")
+
