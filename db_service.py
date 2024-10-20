@@ -155,13 +155,12 @@ class DatabaseService:
             conversation_data = cursor.fetchall()
             conversation_ids = [
                 str(row[0]) for row in conversation_data
-            ]  # Convert UUIDs to strings
+            ]
 
             if not conversation_ids:
                 return []
 
             # Step 2: Prepare the list of conversation_ids as a string for SQL
-            # We'll create a string like: '{uuid1,uuid2,uuid3}'
             conversation_ids_str = "{" + ",".join(conversation_ids) + "}"
 
             query_messages = """
