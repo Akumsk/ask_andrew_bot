@@ -169,24 +169,6 @@ class LLMService:
         return answer, source_files
 
 
-        chain = create_chain(self.vector_store)
-        chat_history = get_chat_history_from_tg()
-        response = chain.invoke(
-            {
-                "chat_history": chat_history,
-                "input": prompt,
-            }
-        )
-
-        answer = response.get("answer", "")
-        sources = response.get("source_documents", [])
-
-        if not sources:
-            return answer, None
-
-        source_files = set([doc.metadata["source"] for doc in sources if "source" in doc.metadata])
-
-        return answer, source_files
 
     def count_tokens_in_context(self, folder_path):
         """Counts the total number of tokens in documents within a folder."""
