@@ -20,16 +20,17 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
             "An unexpected error occurred. Please try again later."
         )
 
+
 def handle_telegram_context_length_exceeded_error(error, user_id, data_context):
     exception_id = "context_length_exceeded"
     exception_type = type(error).__name__
     exception_message = str(error)
     stack_trace = "No stack trace available for context length exceeded."
     occurred_at = (
-                    datetime.now().date().strftime("%Y-%m-%d")
-                    + ", "
-                    + datetime.now().time().strftime("%H:%M:%S")
-            )
+        datetime.now().date().strftime("%Y-%m-%d")
+        + ", "
+        + datetime.now().time().strftime("%H:%M:%S")
+    )
     resolved = False
 
     db_service.log_exception(
@@ -40,5 +41,5 @@ def handle_telegram_context_length_exceeded_error(error, user_id, data_context):
         occurred_at=occurred_at,
         user_id=user_id,
         data_context=data_context,
-        resolved=resolved
+        resolved=resolved,
     )

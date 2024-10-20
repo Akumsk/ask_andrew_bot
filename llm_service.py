@@ -14,6 +14,8 @@ from langchain.text_splitter import CharacterTextSplitter
 from langchain.chains import RetrievalQA, ConversationalRetrievalChain
 from langchain.schema import Document, HumanMessage, AIMessage
 import tiktoken
+
+from db_service import DatabaseService
 from settings import OPENAI_API_KEY, MODEL_NAME
 from langchain.chains.combine_documents import create_stuff_documents_chain
 
@@ -70,41 +72,17 @@ class LLMService:
         self.vector_store = FAISS.from_documents(split_docs, embeddings)
         return "Documents successfully indexed."
 
-    #deprecated need to refactor def generate_response
-    def retrieve_and_generate_temp(self, prompt):
+    def generate_response(self, prompt, chat_history=None):
+
         if not self.vector_store:
-            return "Please set the folder path using /folder and ensure documents are loaded.", None
+            return (
+                "Please set the folder path using /folder and ensure documents are loaded.",
+                None,
+            )
 
-        retriever = self.vector_store.as_retriever()
-
-        qa_chain = RetrievalQA.from_chain_type(
-            llm=self.llm,
-            retriever=retriever,
-            chain_type="stuff",
-            return_source_documents=True
-        )
-
-        try:
-            result = qa_chain.invoke({"query": prompt})
-            sources = result.get("source_documents", [])
-            if not sources:
-                return result["result"], None
-
-            source_files = set([doc.metadata["source"] for doc in sources if "source" in doc.metadata])
-
-            response = result["result"]
-            return response, source_files
-
-        except Exception as e:
-            return f"An error occurred: {str(e)}", None
-    #new function instead of retrieve_and_generate
-    def generate_response (self, prompt):
-
-        # Function to retrieve chat history messages by user ID
-        def get_chat_history_from_tg():
-            # Implement your logic to retrieve chat history from your database or storage
+        # Ensure chat_history is a list
+        if chat_history is None:
             chat_history = []
-            return chat_history
 
         # Create the retriever
         retriever = self.vector_store.as_retriever()
@@ -146,17 +124,11 @@ class LLMService:
 
         # Create the retrieval chain using create_retrieval_chain
         rag_chain = create_retrieval_chain(
-            retriever=history_aware_retriever,
-            combine_docs_chain=question_answer_chain
+            retriever=history_aware_retriever, combine_docs_chain=question_answer_chain
         )
 
-        chat_history = get_chat_history_from_tg()
-
         # Run the chain with the provided prompt and chat history
-        result = rag_chain.invoke({
-            "input": prompt,
-            "chat_history": chat_history
-        })
+        result = rag_chain.invoke({"input": prompt, "chat_history": chat_history})
 
         answer = result.get("answer", "")
         sources = result.get("context", [])
@@ -164,11 +136,11 @@ class LLMService:
         if not sources:
             return answer, None
 
-        source_files = set([doc.metadata["source"] for doc in sources if "source" in doc.metadata])
+        source_files = set(
+            [doc.metadata["source"] for doc in sources if "source" in doc.metadata]
+        )
 
         return answer, source_files
-
-
 
     def count_tokens_in_context(self, folder_path):
         """Counts the total number of tokens in documents within a folder."""
@@ -202,7 +174,9 @@ class LLMService:
             return "No valid files found in the folder. Please provide PDF, Word, or Excel files."
 
         # Count tokens in the documents
-        tokenizer = tiktoken.encoding_for_model('gpt-4')  # Tokenizer for the specific model
+        tokenizer = tiktoken.encoding_for_model(
+            "gpt-4"
+        )  # Tokenizer for the specific model
 
         total_tokens = 0
         for doc in documents:
