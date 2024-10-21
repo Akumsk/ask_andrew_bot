@@ -13,11 +13,12 @@ from langchain_community.document_loaders import PyMuPDFLoader
 from langchain.text_splitter import CharacterTextSplitter
 from langchain.chains import RetrievalQA, ConversationalRetrievalChain
 from langchain.schema import Document, HumanMessage, AIMessage
+from langchain.chains.combine_documents import create_stuff_documents_chain
 import tiktoken
 
 from db_service import DatabaseService
 from settings import OPENAI_API_KEY, MODEL_NAME
-from langchain.chains.combine_documents import create_stuff_documents_chain
+from helpers import current_timestamp
 
 
 class LLMService:
@@ -103,13 +104,15 @@ class LLMService:
             llm=self.llm, retriever=retriever, prompt=retriever_prompt
         )
 
+
+
         # Create the question-answering chain
         system_prompt = (
-            "You are an assistant for question-answering tasks. "
+            "You are an project assistant on design and construction project. "
             "Use the following pieces of retrieved context to answer "
             "the question. If you don't know the answer, say that you "
-            "don't know. Use three sentences maximum and keep the "
-            "answer concise.\n\n{context}"
+            f"don't know. If you need to use current date, today is {current_timestamp()}"
+            " \n\n{context}"
         )
 
         prompt_template = ChatPromptTemplate.from_messages(

@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from langchain.schema import Document, HumanMessage, AIMessage
 
 
@@ -14,3 +16,11 @@ def messages_to_langchain_messages(chat_history_texts):
             chat_history.append(AIMessage(content=content))
 
     return chat_history
+
+def current_timestamp():
+    date_time = (
+            datetime.now().date().strftime("%Y-%m-%d")
+            + ", "
+            + datetime.now().time().strftime("%H:%M:%S")
+    )
+    return date_time

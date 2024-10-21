@@ -31,7 +31,27 @@ class DatabaseService:
             port=self.port,
         )
 
-    def add_user_to_db(self, user_id, user_name, folder):
+
+
+    def save_user(self, user_id, user_name, language_code, date_joined, last_active, is_active):
+        try:
+            connection = self.connect()
+            cursor = connection.cursor()
+            query = """
+                INSERT INTO users (user_id, user_name, language_code, date_joined, last_active, is_active)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """
+
+            cursor.execute(query, (user_id, user_name, language_code, date_joined, last_active, is_active))
+            connection.commit()
+            print("User Data SAVED!!!")
+
+        except Exception as e:
+            print(f"Error saving user data: {e}")
+            connection.rollback()
+
+
+    def save_folder(self, user_id, user_name, folder):
         try:
             connection = self.connect()
             cursor = connection.cursor()
@@ -134,7 +154,7 @@ class DatabaseService:
             cursor.close()
             connection.close()
 
-    def chat_history_from_db(self, dialog_numbers, user_id):
+    def get_chat_history(self, dialog_numbers, user_id):
         connection = None
         cursor = None
         try:

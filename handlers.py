@@ -127,7 +127,14 @@ class BotHandlers:
         """Handle project selection via callback data after /projects command."""
 
         db_service = context.user_data.get("db_service")
+        if not db_service:
+            db_service = DatabaseService()
+            context.user_data["db_service"] = db_service
+
         llm_service = context.user_data.get("llm_service")
+        if not llm_service:
+            llm_service = LLMService()
+            context.user_data["llm_service"] = llm_service
 
         query = update.callback_query
         await query.answer()
@@ -186,7 +193,7 @@ class BotHandlers:
             )
 
             # Save user info in database
-            db_service.add_user_to_db(
+            db_service.save_folder(
                 user_id=user_id, user_name=user_name, folder=folder_path
             )
         else:
@@ -200,6 +207,10 @@ class BotHandlers:
     async def status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the /status command."""
         llm_service = context.user_data.get("llm_service")
+        if not llm_service:
+            llm_service = LLMService()
+            context.user_data["llm_service"] = llm_service
+
         user_name = update.effective_user.full_name
         folder_path = context.user_data.get("folder_path", "")
         valid_files_in_folder = context.user_data.get("valid_files_in_folder", [])
@@ -250,7 +261,15 @@ class BotHandlers:
     async def set_folder(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Set the folder path after receiving it from the user."""
         db_service = context.user_data.get("db_service")
+        if not db_service:
+            db_service = DatabaseService()
+            context.user_data["db_service"] = db_service
+
         llm_service = context.user_data.get("llm_service")
+        if not llm_service:
+            llm_service = LLMService()
+            context.user_data["llm_service"] = llm_service
+
         folder_path = update.message.text.strip()
         user_id = update.effective_user.id
         user_name = update.effective_user.full_name
@@ -298,7 +317,7 @@ class BotHandlers:
         )
 
         # Save user info in database
-        db_service.add_user_to_db(
+        db_service.save_folder(
             user_id=user_id, user_name=user_name, folder=folder_path
         )
 
@@ -306,8 +325,16 @@ class BotHandlers:
 
     async def knowledge_base(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the /knowledge_base command."""
+
         db_service = context.user_data.get("db_service")
+        if not db_service:
+            db_service = DatabaseService()
+            context.user_data["db_service"] = db_service
+
         llm_service = context.user_data.get("llm_service")
+        if not llm_service:
+            llm_service = LLMService()
+            context.user_data["llm_service"] = llm_service
 
         folder_path = KNOWLEDGE_BASE_PATH
         user_id = update.effective_user.id
@@ -356,7 +383,7 @@ class BotHandlers:
         )
 
         # Save user info in database
-        db_service.add_user_to_db(
+        db_service.save_folder(
             user_id=user_id, user_name=user_name, folder=folder_path
         )
 
@@ -398,7 +425,7 @@ class BotHandlers:
 
         db_service.save_message(conversation_id, "user", user_id, user_prompt)
 
-        chat_history_texts = db_service.chat_history_from_db(CHAT_HISTORY_LEVEL, user_id)
+        chat_history_texts = db_service.get_chat_history(CHAT_HISTORY_LEVEL, user_id)
         # Convert chat_history_texts to list of HumanMessage and AIMessage
         chat_history = messages_to_langchain_messages(chat_history_texts)
 
@@ -434,8 +461,16 @@ class BotHandlers:
 
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle any text message sent by the user."""
+
         db_service = context.user_data.get("db_service")
+        if not db_service:
+            db_service = DatabaseService()
+            context.user_data["db_service"] = db_service
         llm_service = context.user_data.get("llm_service")
+        if not llm_service:
+            llm_service = LLMService()
+            context.user_data["llm_service"] = llm_service
+
         if not context.user_data.get("vector_store_loaded", False):
             await update.message.reply_text(
                 "Documents are not indexed yet. Use /folder or /knowledge_base first."
@@ -456,7 +491,7 @@ class BotHandlers:
         # Save the user's message
         db_service.save_message(conversation_id, "user", user_id, user_message)
 
-        chat_history_texts = db_service.chat_history_from_db(CHAT_HISTORY_LEVEL, user_id)
+        chat_history_texts = db_service.get_chat_history(CHAT_HISTORY_LEVEL, user_id)
         # Convert chat_history_texts to list of HumanMessage and AIMessage
         chat_history = messages_to_langchain_messages(chat_history_texts)
 
