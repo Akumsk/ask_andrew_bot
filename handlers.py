@@ -640,14 +640,19 @@ class BotHandlers:
             )
             return ConversationHandler.END
 
-        # Send the bot's response
-        bot_message = (
-            f"{response}\n\nReferences:\n"
-            + "\n".join([f"Document: {file}" for file in source_files])
-            if source_files
-            else response
-        )
-        await update.message.reply_text(bot_message)
+        # Prepare the bot's response
+        bot_message = f"{response}\n\nReferences:"
+
+        if source_files:
+            # Create buttons for each source file
+            keyboard = [
+                [InlineKeyboardButton(file, callback_data=f"get_file:{file}")]
+                for file in source_files
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text(bot_message, reply_markup=reply_markup)
+        else:
+            await update.message.reply_text(response)
 
         # Save the bot's message
         db_service.save_message(conversation_id, "bot", None, bot_message)
@@ -713,17 +718,19 @@ class BotHandlers:
             )
             return ConversationHandler.END
 
+            # Prepare the bot's response
+        bot_message = f"{response}\n\nReferences:"
+
         if source_files:
-            reference_message = "\n".join(
-                [f"Document: {file}" for file in source_files]
-            )
+            # Create buttons for each source file
+            keyboard = [
+                [InlineKeyboardButton(file, callback_data=f"get_file:{file}")]
+                for file in source_files
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text(bot_message, reply_markup=reply_markup)
         else:
-            reference_message = "No document references found."
-
-        bot_message = f"{response}\n\nReferences:\n{reference_message}"
-
-        # Send the bot's response
-        await update.message.reply_text(bot_message)
+            await update.message.reply_text(response)
 
         # Save the bot's message
         db_service.save_message(conversation_id, "bot", None, bot_message)
@@ -736,3 +743,26 @@ class BotHandlers:
             system_response=bot_message,
             conversation_id=conversation_id,
         )
+
+    async def send_file(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        data = query.data
+        if data.startswith("get_file:"):
+            file_name = data[len("get_file:"):]
+            folder_path = context.user_data.get("folder_path")
+            if folder_path:
+                file_path = os.path.join(folder_path, file_name)
+                if os.path.isfile(file_path):
+                    try:
+                        with open(file_path, 'rb') as f:
+                            await query.message.reply_document(document=f, filename=file_name)
+                    except Exception as e:
+                        logging.error(f"Error sending file: {e}")
+                        await query.message.reply_text("An error occurred while sending the file.")
+                else:
+                    await query.message.reply_text("File not found.")
+            else:
+                await query.message.reply_text("Folder path not set.")
+        else:
+            await query.message.reply_text("Unknown command.")
