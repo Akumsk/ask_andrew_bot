@@ -112,6 +112,7 @@ class LLMService:
             "Use the following pieces of retrieved context to answer "
             "the question. If you don't know the answer, say that you "
             f"don't know. If you need to use current date, today is {current_timestamp()}"
+            "Do not include references to the source documents in your answer."
             " \n\n{context}"
         )
 
