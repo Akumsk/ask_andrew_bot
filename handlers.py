@@ -39,6 +39,8 @@ class BotHandlers:
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         user_name = update.effective_user.full_name
+        user_message = '/start'
+        conversation_id = str(uuid.uuid4())
 
         db_service = DatabaseService()
         llm_service = LLMService()
@@ -81,7 +83,7 @@ class BotHandlers:
                 )
                 percentage_full = min(percentage_full, 100)
 
-                await update.message.reply_text(
+                system_response = (
                     f"Welcome back, {user_name}! I have loaded your previous folder for context:\n\n"
                     f"{last_folder}\n\n"
                     f"Context storage is {percentage_full:.2f}% full.\n\n"
@@ -92,12 +94,12 @@ class BotHandlers:
                     "/knowledge_base - Set the context to the knowledge base.\n"
                     "Send any message without a command to ask a question."
                 )
+                await update.message.reply_text(system_response)
             else:
-                await update.message.reply_text(
-                    f"Welcome back, {user_name}! However, no valid files were found in your last folder: {last_folder}."
-                )
+                system_response = f"Welcome back, {user_name}! However, no valid files were found in your last folder: {last_folder}."
+                await update.message.reply_text(system_response)
         else:
-            await update.message.reply_text(
+            system_response = (
                 "Welcome to the AI document assistant bot! This bot generates responses using documents "
                 "in a specified folder. You can interact with the bot using the following commands:\n\n"
                 "/start - Display this introduction message.\n"
@@ -108,17 +110,44 @@ class BotHandlers:
                 "/knowledge_base - Set the context to the knowledge base.\n"
                 "Send any message without a command to ask a question."
             )
+            await update.message.reply_text(system_response)
+        # Save event log
+        db_service.save_event_log(
+            user_id=user_id,
+            event_type="command",
+            user_message=user_message,
+            system_response=system_response,
+            conversation_id=conversation_id,
+        )
 
     async def projects(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the /projects command."""
+        user_id = update.effective_user.id
+        conversation_id = str(uuid.uuid4())
+        user_message = '/projects'
+
         keyboard = [
             [InlineKeyboardButton(project_name, callback_data=project_name)]
             for project_name in PROJECT_PATHS.keys()
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text(
-            "Please select a project:", reply_markup=reply_markup
+        system_response = "Please select a project:"
+        await update.message.reply_text(system_response, reply_markup=reply_markup)
+
+        # Save event log
+        db_service = context.user_data.get("db_service")
+        if not db_service:
+            db_service = DatabaseService()
+            context.user_data["db_service"] = db_service
+
+        db_service.save_event_log(
+            user_id=user_id,
+            event_type="command",
+            user_message=user_message,
+            system_response=system_response,
+            conversation_id=conversation_id,
         )
+
         return WAITING_FOR_PROJECT_SELECTION
 
     async def handle_project_selection_callback(
@@ -139,6 +168,9 @@ class BotHandlers:
         query = update.callback_query
         await query.answer()
         user_choice = query.data
+        user_id = query.from_user.id
+        conversation_id = str(uuid.uuid4())
+        user_message = user_choice
 
         folder_path = PROJECT_PATHS.get(user_choice)
 
@@ -148,8 +180,15 @@ class BotHandlers:
 
             # Check if the folder path exists
             if not os.path.isdir(folder_path):
-                await query.edit_message_text(
-                    "The selected project's folder path does not exist."
+                system_response = "The selected project's folder path does not exist."
+                await query.edit_message_text(system_response)
+                # Save event log
+                db_service.save_event_log(
+                    user_id=user_id,
+                    event_type="command",
+                    user_message=user_message,
+                    system_response=system_response,
+                    conversation_id=conversation_id,
                 )
                 return ConversationHandler.END
 
@@ -160,8 +199,15 @@ class BotHandlers:
                 if f.endswith((".pdf", ".docx", ".xlsx"))
             ]
             if not valid_files_in_folder:
-                await query.edit_message_text(
-                    "No valid files found in the selected project's folder."
+                system_response = "No valid files found in the selected project's folder."
+                await query.edit_message_text(system_response)
+                # Save event log
+                db_service.save_event_log(
+                    user_id=user_id,
+                    event_type="command",
+                    user_message=user_message,
+                    system_response=system_response,
+                    conversation_id=conversation_id,
                 )
                 return ConversationHandler.END
 
@@ -171,8 +217,15 @@ class BotHandlers:
             index_status = llm_service.load_and_index_documents(folder_path)
             if index_status != "Documents successfully indexed.":
                 logging.error(f"Error during load_and_index_documents: {index_status}")
-                await query.edit_message_text(
-                    "An error occurred while loading and indexing the project documents. Please try again later."
+                system_response = "An error occurred while loading and indexing the project documents. Please try again later."
+                await query.edit_message_text(system_response)
+                # Save event log
+                db_service.save_event_log(
+                    user_id=user_id,
+                    event_type="command",
+                    user_message=user_message,
+                    system_response=system_response,
+                    conversation_id=conversation_id,
                 )
                 return ConversationHandler.END
 
@@ -187,20 +240,37 @@ class BotHandlers:
             )
             percentage_full = min(percentage_full, 100)
 
-            await query.edit_message_text(
+            system_response = (
                 f"Project folder path set to: {folder_path}\n\nValid files have been indexed.\n\n"
                 f"Context storage is {percentage_full:.2f}% full."
             )
+            await query.edit_message_text(system_response)
 
             # Save user info in database
             db_service.save_folder(
                 user_id=user_id, user_name=user_name, folder=folder_path
             )
         else:
-            await query.edit_message_text(
-                "Invalid selection or project is not available. Please select a valid project."
+            system_response = "Invalid selection or project is not available. Please select a valid project."
+            await query.edit_message_text(system_response)
+            # Save event log
+            db_service.save_event_log(
+                user_id=user_id,
+                event_type="command",
+                user_message=user_message,
+                system_response=system_response,
+                conversation_id=conversation_id,
             )
             return ConversationHandler.END
+
+            # Save event log
+        db_service.save_event_log(
+            user_id=user_id,
+            event_type="command",
+            user_message=user_message,
+            system_response=system_response,
+            conversation_id=conversation_id,
+        )
 
         return ConversationHandler.END
 
@@ -212,15 +282,19 @@ class BotHandlers:
             context.user_data["llm_service"] = llm_service
 
         user_name = update.effective_user.full_name
+        user_id = update.effective_user.id
+        user_message = '/status'
+        conversation_id = str(uuid.uuid4())
         folder_path = context.user_data.get("folder_path", "")
         valid_files_in_folder = context.user_data.get("valid_files_in_folder", [])
 
         if not folder_path:
-            await update.message.reply_text(
+            system_response = (
                 f"Status Information:\n\n"
                 f"Name: {user_name}\n"
                 "No folder path has been set yet. Please set it using the /folder command."
             )
+            await update.message.reply_text(system_response)
         else:
             if valid_files_in_folder:
                 file_list = "\n".join(valid_files_in_folder)
@@ -238,24 +312,57 @@ class BotHandlers:
                 )
                 percentage_full = min(percentage_full, 100)
 
-                await update.message.reply_text(
+                system_response = (
                     f"Status Information:\n\n"
                     f"Name: {user_name}\n"
                     f"{folder_info}\n\n"
                     f"Context storage is {percentage_full:.2f}% full."
                 )
+                await update.message.reply_text(system_response)
             else:
-                await update.message.reply_text(
+                system_response = (
                     f"Status Information:\n\n"
                     f"Name: {user_name}\n"
                     f"The folder path is currently set to: {folder_path}, but no valid files were found."
                 )
+                await update.message.reply_text(system_response)
+
+            # Save event log
+        db_service = context.user_data.get("db_service")
+        if not db_service:
+            db_service = DatabaseService()
+            context.user_data["db_service"] = db_service
+
+        db_service.save_event_log(
+            user_id=user_id,
+            event_type="command",
+            user_message=user_message,
+            system_response=system_response,
+            conversation_id=conversation_id,
+        )
 
     async def folder(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the /folder command."""
-        await update.message.reply_text(
-            "Please provide the folder path for your documents:"
+        user_id = update.effective_user.id
+        user_message = '/folder'
+        conversation_id = str(uuid.uuid4())
+        system_response = "Please provide the folder path for your documents:"
+        await update.message.reply_text(system_response)
+
+        # Save event log
+        db_service = context.user_data.get("db_service")
+        if not db_service:
+            db_service = DatabaseService()
+            context.user_data["db_service"] = db_service
+
+        db_service.save_event_log(
+            user_id=user_id,
+            event_type="command",
+            user_message=user_message,
+            system_response=system_response,
+            conversation_id=conversation_id,
         )
+
         return WAITING_FOR_FOLDER_PATH
 
     async def set_folder(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -273,11 +380,20 @@ class BotHandlers:
         folder_path = update.message.text.strip()
         user_id = update.effective_user.id
         user_name = update.effective_user.full_name
+        user_message = folder_path
+        conversation_id = str(uuid.uuid4())
 
         # Check if the folder path exists
         if not os.path.isdir(folder_path):
-            await update.message.reply_text(
-                "Invalid folder path. Please provide a valid path."
+            system_response = "Invalid folder path. Please provide a valid path."
+            await update.message.reply_text(system_response)
+            # Save event log
+            db_service.save_event_log(
+                user_id=user_id,
+                event_type="command",
+                user_message=user_message,
+                system_response=system_response,
+                conversation_id=conversation_id,
             )
             return ConversationHandler.END
 
@@ -286,8 +402,15 @@ class BotHandlers:
             f for f in os.listdir(folder_path) if f.endswith((".pdf", ".docx", ".xlsx"))
         ]
         if not valid_files_in_folder:
-            await update.message.reply_text(
-                "No valid files found in the folder. Please provide a folder containing valid documents."
+            system_response = "No valid files found in the folder. Please provide a folder containing valid documents."
+            await update.message.reply_text(system_response)
+            # Save event log
+            db_service.save_event_log(
+                user_id=user_id,
+                event_type="command",
+                user_message=user_message,
+                system_response=system_response,
+                conversation_id=conversation_id,
             )
             return ConversationHandler.END
 
@@ -297,8 +420,15 @@ class BotHandlers:
         index_status = llm_service.load_and_index_documents(folder_path)
         if index_status != "Documents successfully indexed.":
             logging.error(f"Error during load_and_index_documents: {index_status}")
-            await update.message.reply_text(
-                "An error occurred while loading and indexing your documents. Please try again later."
+            system_response = "An error occurred while loading and indexing your documents. Please try again later."
+            await update.message.reply_text(system_response)
+            # Save event log
+            db_service.save_event_log(
+                user_id=user_id,
+                event_type="command",
+                user_message=user_message,
+                system_response=system_response,
+                conversation_id=conversation_id,
             )
             return ConversationHandler.END
 
@@ -311,14 +441,24 @@ class BotHandlers:
         )
         percentage_full = min(percentage_full, 100)
 
-        await update.message.reply_text(
+        system_response = (
             f"Folder path successfully set to: {folder_path}\n\nValid files have been indexed.\n\n"
             f"Context storage is {percentage_full:.2f}% full."
         )
+        await update.message.reply_text(system_response)
 
         # Save user info in database
         db_service.save_folder(
             user_id=user_id, user_name=user_name, folder=folder_path
+        )
+
+        # Save event log
+        db_service.save_event_log(
+            user_id=user_id,
+            event_type="command",
+            user_message=user_message,
+            system_response=system_response,
+            conversation_id=conversation_id,
         )
 
         return ConversationHandler.END
@@ -339,11 +479,20 @@ class BotHandlers:
         folder_path = KNOWLEDGE_BASE_PATH
         user_id = update.effective_user.id
         user_name = update.effective_user.full_name
+        user_message = '/knowledge_base'
+        conversation_id = str(uuid.uuid4())
 
         # Check if the folder path exists
         if not os.path.isdir(folder_path):
-            await update.message.reply_text(
-                "The knowledge base folder path does not exist."
+            system_response = "The knowledge base folder path does not exist."
+            await update.message.reply_text(system_response)
+            # Save event log
+            db_service.save_event_log(
+                user_id=user_id,
+                event_type="command",
+                user_message=user_message,
+                system_response=system_response,
+                conversation_id=conversation_id,
             )
             return
 
@@ -352,8 +501,15 @@ class BotHandlers:
             f for f in os.listdir(folder_path) if f.endswith((".pdf", ".docx", ".xlsx"))
         ]
         if not valid_files_in_folder:
-            await update.message.reply_text(
-                "No valid files found in the knowledge base folder."
+            system_response = "No valid files found in the knowledge base folder."
+            await update.message.reply_text(system_response)
+            # Save event log
+            db_service.save_event_log(
+                user_id=user_id,
+                event_type="command",
+                user_message=user_message,
+                system_response=system_response,
+                conversation_id=conversation_id,
             )
             return
 
@@ -363,8 +519,15 @@ class BotHandlers:
         index_status = llm_service.load_and_index_documents(folder_path)
         if index_status != "Documents successfully indexed.":
             logging.error(f"Error during load_and_index_documents: {index_status}")
-            await update.message.reply_text(
-                "An error occurred while loading and indexing the knowledge base documents. Please try again later."
+            system_response = "An error occurred while loading and indexing the knowledge base documents. Please try again later."
+            await update.message.reply_text(system_response)
+            # Save event log
+            db_service.save_event_log(
+                user_id=user_id,
+                event_type="command",
+                user_message=user_message,
+                system_response=system_response,
+                conversation_id=conversation_id,
             )
             return
 
@@ -377,34 +540,59 @@ class BotHandlers:
         )
         percentage_full = min(percentage_full, 100)
 
-        await update.message.reply_text(
+        system_response = (
             f"Knowledge base folder path set to: {folder_path}\n\nValid files have been indexed.\n\n"
             f"Context storage is {percentage_full:.2f}% full."
         )
+        await update.message.reply_text(system_response)
 
         # Save user info in database
         db_service.save_folder(
             user_id=user_id, user_name=user_name, folder=folder_path
         )
 
+        # Save event log
+        db_service.save_event_log(
+            user_id=user_id,
+            event_type="command",
+            user_message=user_message,
+            system_response=system_response,
+            conversation_id=conversation_id,
+        )
+
     async def ask(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the /ask command."""
         if not context.user_data.get("vector_store_loaded", False):
-            await update.message.reply_text(
-                "Documents are not indexed yet. Use /folder or /knowledge_base first."
-            )
+            system_response = "Documents are not indexed yet. Use /folder or /knowledge_base first."
+            await update.message.reply_text(system_response)
             return ConversationHandler.END
 
         valid_files_in_folder = context.user_data.get("valid_files_in_folder", [])
         if not valid_files_in_folder:
-            await update.message.reply_text(
-                "No valid documents found in the folder. Please add documents to the folder."
-            )
+            system_response = "No valid documents found in the folder. Please add documents to the folder."
+            await update.message.reply_text(system_response)
             return ConversationHandler.END
 
-        await update.message.reply_text(
-            "Please provide the question you want to ask about the documents:"
+        system_response = "Please provide the question you want to ask about the documents:"
+        await update.message.reply_text(system_response)
+
+        # Save event log
+        user_id = update.effective_user.id
+        user_message = '/ask'
+        conversation_id = str(uuid.uuid4())
+        db_service = context.user_data.get("db_service")
+        if not db_service:
+            db_service = DatabaseService()
+            context.user_data["db_service"] = db_service
+
+        db_service.save_event_log(
+            user_id=user_id,
+            event_type="command",
+            user_message=user_message,
+            system_response=system_response,
+            conversation_id=conversation_id,
         )
+
         return WAITING_FOR_QUESTION
 
     async def ask_question(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -440,8 +628,15 @@ class BotHandlers:
             )
         except Exception as e:
             logging.error(f"Error during generate_response: {e}")
-            await update.message.reply_text(
-                "An error occurred while processing your question. Please try again later."
+            system_response = "An error occurred while processing your question. Please try again later."
+            await update.message.reply_text(system_response)
+            # Save event log
+            db_service.save_event_log(
+                user_id=user_id,
+                event_type="ai_conversation",
+                user_message=user_prompt,
+                system_response=system_response,
+                conversation_id=conversation_id,
             )
             return ConversationHandler.END
 
@@ -456,6 +651,15 @@ class BotHandlers:
 
         # Save the bot's message
         db_service.save_message(conversation_id, "bot", None, bot_message)
+
+        # Save event log
+        db_service.save_event_log(
+            user_id=user_id,
+            event_type="ai_conversation",
+            user_message=user_prompt,
+            system_response=bot_message,
+            conversation_id=conversation_id,
+        )
 
         return ConversationHandler.END
 
@@ -472,16 +676,14 @@ class BotHandlers:
             context.user_data["llm_service"] = llm_service
 
         if not context.user_data.get("vector_store_loaded", False):
-            await update.message.reply_text(
-                "Documents are not indexed yet. Use /folder or /knowledge_base first."
-            )
+            system_response = "Documents are not indexed yet. Use /folder or /knowledge_base first."
+            await update.message.reply_text(system_response)
             return
 
         valid_files_in_folder = context.user_data.get("valid_files_in_folder", [])
         if not valid_files_in_folder:
-            await update.message.reply_text(
-                "No valid documents found in the folder. Please add documents to the folder."
-            )
+            system_response = "No valid documents found in the folder. Please add documents to the folder."
+            await update.message.reply_text(system_response)
             return
 
         user_message = update.message.text
@@ -495,13 +697,19 @@ class BotHandlers:
         # Convert chat_history_texts to list of HumanMessage and AIMessage
         chat_history = messages_to_langchain_messages(chat_history_texts)
 
-
         try:
             response, source_files = llm_service.generate_response(user_message, chat_history=chat_history)
         except Exception as e:
             logging.error(f"Error during generate_response: {e}")
-            await update.message.reply_text(
-                "An error occurred while processing your message. Please try again later."
+            system_response = "An error occurred while processing your message. Please try again later."
+            await update.message.reply_text(system_response)
+            # Save event log
+            db_service.save_event_log(
+                user_id=user_id,
+                event_type="ai_conversation",
+                user_message=user_message,
+                system_response=system_response,
+                conversation_id=conversation_id,
             )
             return ConversationHandler.END
 
@@ -519,3 +727,12 @@ class BotHandlers:
 
         # Save the bot's message
         db_service.save_message(conversation_id, "bot", None, bot_message)
+
+        # Save event log
+        db_service.save_event_log(
+            user_id=user_id,
+            event_type="ai_conversation",
+            user_message=user_message,
+            system_response=bot_message,
+            conversation_id=conversation_id,
+        )

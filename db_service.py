@@ -32,25 +32,6 @@ class DatabaseService:
         )
 
 
-
-    def save_user(self, user_id, user_name, language_code, date_joined, last_active, is_active):
-        try:
-            connection = self.connect()
-            cursor = connection.cursor()
-            query = """
-                INSERT INTO users (user_id, user_name, language_code, date_joined, last_active, is_active)
-                VALUES (%s, %s, %s, %s, %s, %s)
-            """
-
-            cursor.execute(query, (user_id, user_name, language_code, date_joined, last_active, is_active))
-            connection.commit()
-            print("User Data SAVED!!!")
-
-        except Exception as e:
-            print(f"Error saving user data: {e}")
-            connection.rollback()
-
-
     def save_folder(self, user_id, user_name, folder):
         try:
             connection = self.connect()
@@ -67,10 +48,10 @@ class DatabaseService:
             cursor.execute(query, (user_id, user_name, folder, date_time))
 
             connection.commit()
-            print("User Data SAVED!!!")
+            print("Contex Folder Data SAVED!!!")
 
         except Exception as e:
-            print(f"Error saving user data: {e}")
+            print(f"Error saving folder data: {e}")
             connection.rollback()
 
     def get_last_folder(self, user_id):
@@ -93,6 +74,29 @@ class DatabaseService:
             print(f"An error occurred while fetching folder: {e}")
 
         return folder
+
+    def save_event_log(self, user_id, event_type, user_message, system_response, conversation_id, timestamp=None):
+        try:
+            connection = self.connect()
+            cursor = connection.cursor()
+            if timestamp is None:
+                timestamp = datetime.now()
+            query = """
+                INSERT INTO event_log (user_id, event_type, user_message, system_response, timestamp, conversation_id)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """
+            cursor.execute(
+                query,
+                (user_id, event_type, user_message, system_response, timestamp, conversation_id),
+            )
+            connection.commit()
+            print("Event log saved successfully.")
+        except Exception as e:
+            print(f"Error saving event log: {e}")
+            connection.rollback()
+        finally:
+            cursor.close()
+            connection.close()
 
     def log_exception(
         self,
