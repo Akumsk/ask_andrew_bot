@@ -74,8 +74,11 @@ def main():
     application.add_handler(folder_conv_handler)
     application.add_handler(ask_conv_handler)
     application.add_handler(project_conv_handler)
+    application.add_handler(
+        CallbackQueryHandler(handlers.handle_question_callback, pattern=r'^ask_question:')
+    )
 
-    # Add the handler for file download
+    # Handler for file download
     application.add_handler(CallbackQueryHandler(handlers.send_file, pattern=r'^get_file:'))
 
     application.add_handler(
