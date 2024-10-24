@@ -3,22 +3,30 @@
 import logging
 import os
 import uuid
+import urllib.parse
 from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
 
-from settings import PROJECT_PATHS, MAX_TOKENS_IN_CONTEXT, KNOWLEDGE_BASE_PATH, CHAT_HISTORY_LEVEL, FOLLOWING_QUESTIONS
-from db_service import DatabaseService
-from llm_service import LLMService
-from helpers import messages_to_langchain_messages
+from settings import (
+    PROJECT_PATHS,
+    MAX_TOKENS_IN_CONTEXT,
+    KNOWLEDGE_BASE_PATH,
+    CHAT_HISTORY_LEVEL,
+    FOLLOWING_QUESTIONS,
+)
+from helpers import (
+    messages_to_langchain_messages,
+    ensure_services,
+    check_vector_store_loaded,
+    calculate_percentage_full,
+    get_valid_files_in_folder,
+)
+
+from gdrive_service import get_flow, save_credentials, build_service
 
 
 WAITING_FOR_FOLDER_PATH, WAITING_FOR_QUESTION, WAITING_FOR_PROJECT_SELECTION = range(3)
-
-
-class User:
-    def __init__(self, update: Update):
-        self.user_id = update.effective_user.id
-        self.user_name = update.effective_user.full_name
+WAITING_FOR_GDRIVE_FOLDER_ID = 4
 
 
 class BotHandlers:
@@ -36,29 +44,22 @@ class BotHandlers:
         ]
         await application.bot.set_my_commands(commands)
 
+    @ensure_services
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         user_name = update.effective_user.full_name
-        user_message = '/start'
+        user_message = "/start"
         conversation_id = str(uuid.uuid4())
 
-        db_service = DatabaseService()
-        llm_service = LLMService()
-
-        context.user_data["db_service"] = db_service
-        context.user_data["llm_service"] = llm_service
-        context.user_data["user_id"] = user_id  # Store user_id for future use
+        db_service = context.user_data["db_service"]
+        llm_service = context.user_data["llm_service"]
 
         # Try to get the last folder from the database for the user
         last_folder = db_service.get_last_folder(user_id)
 
         if last_folder and os.path.isdir(last_folder):
             context.user_data["folder_path"] = last_folder
-            valid_files_in_folder = [
-                f
-                for f in os.listdir(last_folder)
-                if f.endswith((".pdf", ".docx", ".xlsx"))
-            ]
+            valid_files_in_folder = get_valid_files_in_folder(last_folder)
             context.user_data["valid_files_in_folder"] = valid_files_in_folder
 
             if valid_files_in_folder:
@@ -76,12 +77,9 @@ class BotHandlers:
 
                 # Evaluate token count
                 token_count = llm_service.count_tokens_in_context(last_folder)
-                percentage_full = (
-                    (token_count / MAX_TOKENS_IN_CONTEXT) * 100
-                    if MAX_TOKENS_IN_CONTEXT
-                    else 0
+                percentage_full = calculate_percentage_full(
+                    token_count, MAX_TOKENS_IN_CONTEXT
                 )
-                percentage_full = min(percentage_full, 100)
 
                 system_response = (
                     f"Welcome back, {user_name}! I have loaded your previous folder for context:\n\n"
@@ -96,7 +94,9 @@ class BotHandlers:
                 )
                 await update.message.reply_text(system_response)
             else:
-                system_response = f"Welcome back, {user_name}! However, no valid files were found in your last folder: {last_folder}."
+                system_response = (
+                    f"Welcome back, {user_name}! However, no valid files were found in your last folder: {last_folder}."
+                )
                 await update.message.reply_text(system_response)
         else:
             system_response = (
@@ -112,19 +112,14 @@ class BotHandlers:
             )
             await update.message.reply_text(system_response)
         # Save event log
-        db_service.save_event_log(
-            user_id=user_id,
-            event_type="command",
-            user_message=user_message,
-            system_response=system_response,
-            conversation_id=conversation_id,
-        )
+        db_service.save_event_log(user_id, "command", user_message, system_response, conversation_id)
 
+    @ensure_services
     async def projects(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the /projects command."""
         user_id = update.effective_user.id
         conversation_id = str(uuid.uuid4())
-        user_message = '/projects'
+        user_message = "/projects"
 
         keyboard = [
             [InlineKeyboardButton(project_name, callback_data=project_name)]
@@ -136,34 +131,15 @@ class BotHandlers:
 
         # Save event log
         db_service = context.user_data.get("db_service")
-        if not db_service:
-            db_service = DatabaseService()
-            context.user_data["db_service"] = db_service
-
-        db_service.save_event_log(
-            user_id=user_id,
-            event_type="command",
-            user_message=user_message,
-            system_response=system_response,
-            conversation_id=conversation_id,
-        )
+        db_service.save_event_log(user_id, "command", user_message, system_response, conversation_id)
 
         return WAITING_FOR_PROJECT_SELECTION
 
+    @ensure_services
     async def handle_project_selection_callback(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ):
         """Handle project selection via callback data after /projects command."""
-
-        db_service = context.user_data.get("db_service")
-        if not db_service:
-            db_service = DatabaseService()
-            context.user_data["db_service"] = db_service
-
-        llm_service = context.user_data.get("llm_service")
-        if not llm_service:
-            llm_service = LLMService()
-            context.user_data["llm_service"] = llm_service
 
         query = update.callback_query
         await query.answer()
@@ -174,6 +150,9 @@ class BotHandlers:
 
         folder_path = PROJECT_PATHS.get(user_choice)
 
+        db_service = context.user_data.get("db_service")
+        llm_service = context.user_data.get("llm_service")
+
         if folder_path:
             user_id = update.effective_user.id
             user_name = update.effective_user.full_name
@@ -183,32 +162,19 @@ class BotHandlers:
                 system_response = "The selected project's folder path does not exist."
                 await query.edit_message_text(system_response)
                 # Save event log
-                db_service.save_event_log(
-                    user_id=user_id,
-                    event_type="command",
-                    user_message=user_message,
-                    system_response=system_response,
-                    conversation_id=conversation_id,
+                db_service.save_event_log(user_id, "command", user_message, system_response, conversation_id,
                 )
                 return ConversationHandler.END
 
             # Check for valid files
-            valid_files_in_folder = [
-                f
-                for f in os.listdir(folder_path)
-                if f.endswith((".pdf", ".docx", ".xlsx"))
-            ]
+            valid_files_in_folder = get_valid_files_in_folder(folder_path)
             if not valid_files_in_folder:
-                system_response = "No valid files found in the selected project's folder."
+                system_response = (
+                    "No valid files found in the selected project's folder."
+                )
                 await query.edit_message_text(system_response)
                 # Save event log
-                db_service.save_event_log(
-                    user_id=user_id,
-                    event_type="command",
-                    user_message=user_message,
-                    system_response=system_response,
-                    conversation_id=conversation_id,
-                )
+                db_service.save_event_log(user_id, "command", user_message, system_response, conversation_id)
                 return ConversationHandler.END
 
             # Set user-specific folder path and process the documents
@@ -216,29 +182,24 @@ class BotHandlers:
             context.user_data["valid_files_in_folder"] = valid_files_in_folder
             index_status = llm_service.load_and_index_documents(folder_path)
             if index_status != "Documents successfully indexed.":
-                logging.error(f"Error during load_and_index_documents: {index_status}")
-                system_response = "An error occurred while loading and indexing the project documents. Please try again later."
+                logging.error(
+                    f"Error during load_and_index_documents: {index_status}"
+                )
+                system_response = (
+                    "An error occurred while loading and indexing the project documents. Please try again later."
+                )
                 await query.edit_message_text(system_response)
                 # Save event log
-                db_service.save_event_log(
-                    user_id=user_id,
-                    event_type="command",
-                    user_message=user_message,
-                    system_response=system_response,
-                    conversation_id=conversation_id,
-                )
+                db_service.save_event_log(user_id, "command", user_message, system_response, conversation_id)
                 return ConversationHandler.END
 
             context.user_data["vector_store_loaded"] = True
 
             # Evaluate token count
             token_count = llm_service.count_tokens_in_context(folder_path)
-            percentage_full = (
-                (token_count / MAX_TOKENS_IN_CONTEXT) * 100
-                if MAX_TOKENS_IN_CONTEXT
-                else 0
+            percentage_full = calculate_percentage_full(
+                token_count, MAX_TOKENS_IN_CONTEXT
             )
-            percentage_full = min(percentage_full, 100)
 
             system_response = (
                 f"Project folder path set to: {folder_path}\n\nValid files have been indexed.\n\n"
@@ -247,50 +208,44 @@ class BotHandlers:
             await query.edit_message_text(system_response)
 
             # Save user info in database
-            db_service.save_folder(
-                user_id=user_id, user_name=user_name, folder=folder_path
-            )
+            db_service.save_folder(user_id, user_name, folder_path)
 
             # Prepare buttons with the three questions
             questions = FOLLOWING_QUESTIONS
-            keyboard = [[InlineKeyboardButton(q, callback_data=f"ask_question:{q}")] for q in questions]
+            keyboard = [
+                [InlineKeyboardButton(q, callback_data=f"ask_question:{q}")]
+                for q in questions
+            ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await query.message.reply_text(
-                "You can ask the following questions about the project:",
-                reply_markup=reply_markup
+                "Ask any project-related question by messaging the bot or use the suggested questions below:",
+                reply_markup=reply_markup,
             )
 
         else:
-            system_response = "Invalid selection or project is not available. Please select a valid project."
+            system_response = (
+                "Invalid selection or project is not available. Please select a valid project."
+            )
             await query.edit_message_text(system_response)
             # Save event log
-            db_service.save_event_log(
-                user_id=user_id,
-                event_type="command",
-                user_message=user_message,
-                system_response=system_response,
-                conversation_id=conversation_id,
-            )
+            db_service.save_event_log(user_id, "command", user_message, system_response, conversation_id)
             return ConversationHandler.END
 
-            # Save event log
-        db_service.save_event_log(
-            user_id=user_id,
-            event_type="command",
-            user_message=user_message,
-            system_response=system_response,
-            conversation_id=conversation_id,
-        )
+        # Save event log
+        db_service.save_event_log(user_id, "command", user_message, system_response, conversation_id)
 
         return ConversationHandler.END
 
-    async def handle_question_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    @ensure_services
+    async def handle_question_callback(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ):
         """Handle the question buttons after project selection."""
         query = update.callback_query
         await query.answer()
         data = query.data
         if data.startswith("ask_question:"):
-            question = data[len("ask_question:"):]
+            question = data[len("ask_question:") :]
             # Now, process the question as if the user asked it
 
             user_id = context.user_data.get("user_id")
@@ -301,20 +256,15 @@ class BotHandlers:
             conversation_id = str(uuid.uuid4())
 
             db_service = context.user_data.get("db_service")
-            if not db_service:
-                db_service = DatabaseService()
-                context.user_data["db_service"] = db_service
-
             db_service.save_message(conversation_id, "user", user_id, question)
 
-            chat_history_texts = db_service.get_chat_history(CHAT_HISTORY_LEVEL, user_id)
+            chat_history_texts = db_service.get_chat_history(
+                CHAT_HISTORY_LEVEL, user_id
+            )
             # Convert chat_history_texts to list of HumanMessage and AIMessage
             chat_history = messages_to_langchain_messages(chat_history_texts)
 
             llm_service = context.user_data.get("llm_service")
-            if not llm_service:
-                llm_service = LLMService()
-                context.user_data["llm_service"] = llm_service
 
             try:
                 response, source_files = llm_service.generate_response(
@@ -322,16 +272,12 @@ class BotHandlers:
                 )
             except Exception as e:
                 logging.error(f"Error during generate_response: {e}")
-                system_response = "An error occurred while processing your question. Please try again later."
+                system_response = (
+                    "An error occurred while processing your question. Please try again later."
+                )
                 await query.message.reply_text(system_response)
                 # Save event log
-                db_service.save_event_log(
-                    user_id=user_id,
-                    event_type="ai_conversation",
-                    user_message=question,
-                    system_response=system_response,
-                    conversation_id=conversation_id,
-                )
+                db_service.save_event_log(user_id, "ai_conversation", question, system_response, conversation_id)
                 return
 
             # Prepare the bot's response
@@ -344,7 +290,9 @@ class BotHandlers:
                     for file in source_files
                 ]
                 reply_markup = InlineKeyboardMarkup(keyboard)
-                await query.message.reply_text(bot_message, reply_markup=reply_markup)
+                await query.message.reply_text(
+                    bot_message, reply_markup=reply_markup
+                )
             else:
                 await query.message.reply_text(response)
 
@@ -352,24 +300,16 @@ class BotHandlers:
             db_service.save_message(conversation_id, "bot", None, bot_message)
 
             # Save event log
-            db_service.save_event_log(
-                user_id=user_id,
-                event_type="ai_conversation",
-                user_message=question,
-                system_response=bot_message,
-                conversation_id=conversation_id,
-            )
+            db_service.save_event_log(user_id, "ai_conversation", question, bot_message, conversation_id)
 
+    @ensure_services
     async def status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the /status command."""
         llm_service = context.user_data.get("llm_service")
-        if not llm_service:
-            llm_service = LLMService()
-            context.user_data["llm_service"] = llm_service
 
         user_name = update.effective_user.full_name
         user_id = update.effective_user.id
-        user_message = '/status'
+        user_message = "/status"
         conversation_id = str(uuid.uuid4())
         folder_path = context.user_data.get("folder_path", "")
         valid_files_in_folder = context.user_data.get("valid_files_in_folder", [])
@@ -391,12 +331,9 @@ class BotHandlers:
 
                 # Evaluate token count
                 token_count = llm_service.count_tokens_in_context(folder_path)
-                percentage_full = (
-                    (token_count / MAX_TOKENS_IN_CONTEXT) * 100
-                    if MAX_TOKENS_IN_CONTEXT
-                    else 0
+                percentage_full = calculate_percentage_full(
+                    token_count, MAX_TOKENS_IN_CONTEXT
                 )
-                percentage_full = min(percentage_full, 100)
 
                 system_response = (
                     f"Status Information:\n\n"
@@ -413,55 +350,29 @@ class BotHandlers:
                 )
                 await update.message.reply_text(system_response)
 
-            # Save event log
+        # Save event log
         db_service = context.user_data.get("db_service")
-        if not db_service:
-            db_service = DatabaseService()
-            context.user_data["db_service"] = db_service
-
-        db_service.save_event_log(
-            user_id=user_id,
-            event_type="command",
-            user_message=user_message,
-            system_response=system_response,
-            conversation_id=conversation_id,
-        )
+        db_service.save_event_log(user_id, "command", user_message, system_response, conversation_id)
 
     async def folder(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the /folder command."""
         user_id = update.effective_user.id
-        user_message = '/folder'
+        user_message = "/folder"
         conversation_id = str(uuid.uuid4())
         system_response = "Please provide the folder path for your documents:"
         await update.message.reply_text(system_response)
 
         # Save event log
         db_service = context.user_data.get("db_service")
-        if not db_service:
-            db_service = DatabaseService()
-            context.user_data["db_service"] = db_service
-
-        db_service.save_event_log(
-            user_id=user_id,
-            event_type="command",
-            user_message=user_message,
-            system_response=system_response,
-            conversation_id=conversation_id,
-        )
+        db_service.save_event_log(user_id, "command", user_message, system_response, conversation_id)
 
         return WAITING_FOR_FOLDER_PATH
 
+    @ensure_services
     async def set_folder(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Set the folder path after receiving it from the user."""
         db_service = context.user_data.get("db_service")
-        if not db_service:
-            db_service = DatabaseService()
-            context.user_data["db_service"] = db_service
-
         llm_service = context.user_data.get("llm_service")
-        if not llm_service:
-            llm_service = LLMService()
-            context.user_data["llm_service"] = llm_service
 
         folder_path = update.message.text.strip()
         user_id = update.effective_user.id
@@ -471,33 +382,23 @@ class BotHandlers:
 
         # Check if the folder path exists
         if not os.path.isdir(folder_path):
-            system_response = "Invalid folder path. Please provide a valid path."
+            system_response = (
+                "Invalid folder path. Please provide a valid path."
+            )
             await update.message.reply_text(system_response)
             # Save event log
-            db_service.save_event_log(
-                user_id=user_id,
-                event_type="command",
-                user_message=user_message,
-                system_response=system_response,
-                conversation_id=conversation_id,
-            )
+            db_service.save_event_log(user_id, "command", user_message, system_response, conversation_id)
             return ConversationHandler.END
 
         # Check for valid files
-        valid_files_in_folder = [
-            f for f in os.listdir(folder_path) if f.endswith((".pdf", ".docx", ".xlsx"))
-        ]
+        valid_files_in_folder = get_valid_files_in_folder(folder_path)
         if not valid_files_in_folder:
-            system_response = "No valid files found in the folder. Please provide a folder containing valid documents."
+            system_response = (
+                "No valid files found in the folder. Please provide a folder containing valid documents."
+            )
             await update.message.reply_text(system_response)
             # Save event log
-            db_service.save_event_log(
-                user_id=user_id,
-                event_type="command",
-                user_message=user_message,
-                system_response=system_response,
-                conversation_id=conversation_id,
-            )
+            db_service.save_event_log(user_id, "command", user_message, system_response, conversation_id)
             return ConversationHandler.END
 
         # Set user-specific folder path and process the documents
@@ -505,27 +406,24 @@ class BotHandlers:
         context.user_data["valid_files_in_folder"] = valid_files_in_folder
         index_status = llm_service.load_and_index_documents(folder_path)
         if index_status != "Documents successfully indexed.":
-            logging.error(f"Error during load_and_index_documents: {index_status}")
-            system_response = "An error occurred while loading and indexing your documents. Please try again later."
+            logging.error(
+                f"Error during load_and_index_documents: {index_status}"
+            )
+            system_response = (
+                "An error occurred while loading and indexing your documents. Please try again later."
+            )
             await update.message.reply_text(system_response)
             # Save event log
-            db_service.save_event_log(
-                user_id=user_id,
-                event_type="command",
-                user_message=user_message,
-                system_response=system_response,
-                conversation_id=conversation_id,
-            )
+            db_service.save_event_log(user_id, "command", user_message, system_response, conversation_id)
             return ConversationHandler.END
 
         context.user_data["vector_store_loaded"] = True
 
         # Evaluate token count
         token_count = llm_service.count_tokens_in_context(folder_path)
-        percentage_full = (
-            (token_count / MAX_TOKENS_IN_CONTEXT) * 100 if MAX_TOKENS_IN_CONTEXT else 0
+        percentage_full = calculate_percentage_full(
+            token_count, MAX_TOKENS_IN_CONTEXT
         )
-        percentage_full = min(percentage_full, 100)
 
         system_response = (
             f"Folder path successfully set to: {folder_path}\n\nValid files have been indexed.\n\n"
@@ -534,38 +432,24 @@ class BotHandlers:
         await update.message.reply_text(system_response)
 
         # Save user info in database
-        db_service.save_folder(
-            user_id=user_id, user_name=user_name, folder=folder_path
-        )
+        db_service.save_folder(user_id, user_name, folder_path)
 
         # Save event log
-        db_service.save_event_log(
-            user_id=user_id,
-            event_type="command",
-            user_message=user_message,
-            system_response=system_response,
-            conversation_id=conversation_id,
-        )
+        db_service.save_event_log(user_id, "command", user_message, system_response, conversation_id)
 
         return ConversationHandler.END
 
+    @ensure_services
     async def knowledge_base(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the /knowledge_base command."""
 
         db_service = context.user_data.get("db_service")
-        if not db_service:
-            db_service = DatabaseService()
-            context.user_data["db_service"] = db_service
-
         llm_service = context.user_data.get("llm_service")
-        if not llm_service:
-            llm_service = LLMService()
-            context.user_data["llm_service"] = llm_service
 
         folder_path = KNOWLEDGE_BASE_PATH
         user_id = update.effective_user.id
         user_name = update.effective_user.full_name
-        user_message = '/knowledge_base'
+        user_message = "/knowledge_base"
         conversation_id = str(uuid.uuid4())
 
         # Check if the folder path exists
@@ -573,30 +457,18 @@ class BotHandlers:
             system_response = "The knowledge base folder path does not exist."
             await update.message.reply_text(system_response)
             # Save event log
-            db_service.save_event_log(
-                user_id=user_id,
-                event_type="command",
-                user_message=user_message,
-                system_response=system_response,
-                conversation_id=conversation_id,
-            )
+            db_service.save_event_log(user_id, "command", user_message, system_response, conversation_id)
             return
 
         # Check for valid files
-        valid_files_in_folder = [
-            f for f in os.listdir(folder_path) if f.endswith((".pdf", ".docx", ".xlsx"))
-        ]
+        valid_files_in_folder = get_valid_files_in_folder(folder_path)
         if not valid_files_in_folder:
-            system_response = "No valid files found in the knowledge base folder."
+            system_response = (
+                "No valid files found in the knowledge base folder."
+            )
             await update.message.reply_text(system_response)
             # Save event log
-            db_service.save_event_log(
-                user_id=user_id,
-                event_type="command",
-                user_message=user_message,
-                system_response=system_response,
-                conversation_id=conversation_id,
-            )
+            db_service.save_event_log(user_id, "command", user_message, system_response, conversation_id)
             return
 
         # Set user-specific folder path and process the documents
@@ -604,27 +476,24 @@ class BotHandlers:
         context.user_data["valid_files_in_folder"] = valid_files_in_folder
         index_status = llm_service.load_and_index_documents(folder_path)
         if index_status != "Documents successfully indexed.":
-            logging.error(f"Error during load_and_index_documents: {index_status}")
-            system_response = "An error occurred while loading and indexing the knowledge base documents. Please try again later."
+            logging.error(
+                f"Error during load_and_index_documents: {index_status}"
+            )
+            system_response = (
+                "An error occurred while loading and indexing the knowledge base documents. Please try again later."
+            )
             await update.message.reply_text(system_response)
             # Save event log
-            db_service.save_event_log(
-                user_id=user_id,
-                event_type="command",
-                user_message=user_message,
-                system_response=system_response,
-                conversation_id=conversation_id,
-            )
+            db_service.save_event_log(user_id, "command", user_message, system_response, conversation_id)
             return
 
         context.user_data["vector_store_loaded"] = True
 
         # Evaluate token count
         token_count = llm_service.count_tokens_in_context(folder_path)
-        percentage_full = (
-            (token_count / MAX_TOKENS_IN_CONTEXT) * 100 if MAX_TOKENS_IN_CONTEXT else 0
+        percentage_full = calculate_percentage_full(
+            token_count, MAX_TOKENS_IN_CONTEXT
         )
-        percentage_full = min(percentage_full, 100)
 
         system_response = (
             f"Knowledge base folder path set to: {folder_path}\n\nValid files have been indexed.\n\n"
@@ -633,54 +502,40 @@ class BotHandlers:
         await update.message.reply_text(system_response)
 
         # Save user info in database
-        db_service.save_folder(
-            user_id=user_id, user_name=user_name, folder=folder_path
-        )
+        db_service.save_folder(user_id, user_name, folder_path)
 
         # Save event log
-        db_service.save_event_log(
-            user_id=user_id,
-            event_type="command",
-            user_message=user_message,
-            system_response=system_response,
-            conversation_id=conversation_id,
-        )
+        db_service.save_event_log(user_id, "command", user_message, system_response, conversation_id)
 
+    @ensure_services
+    @check_vector_store_loaded
     async def ask(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the /ask command."""
-        if not context.user_data.get("vector_store_loaded", False):
-            system_response = "Documents are not indexed yet. Use /folder or /knowledge_base first."
-            await update.message.reply_text(system_response)
-            return ConversationHandler.END
 
         valid_files_in_folder = context.user_data.get("valid_files_in_folder", [])
         if not valid_files_in_folder:
-            system_response = "No valid documents found in the folder. Please add documents to the folder."
+            system_response = (
+                "No valid documents found in the folder. Please add documents to the folder."
+            )
             await update.message.reply_text(system_response)
             return ConversationHandler.END
 
-        system_response = "Please provide the question you want to ask about the documents:"
+        system_response = (
+            "Please provide the question you want to ask about the documents:"
+        )
         await update.message.reply_text(system_response)
 
         # Save event log
         user_id = update.effective_user.id
-        user_message = '/ask'
+        user_message = "/ask"
         conversation_id = str(uuid.uuid4())
         db_service = context.user_data.get("db_service")
-        if not db_service:
-            db_service = DatabaseService()
-            context.user_data["db_service"] = db_service
-
-        db_service.save_event_log(
-            user_id=user_id,
-            event_type="command",
-            user_message=user_message,
-            system_response=system_response,
-            conversation_id=conversation_id,
-        )
+        db_service.save_event_log(user_id, "command", user_message, system_response, conversation_id)
 
         return WAITING_FOR_QUESTION
 
+    @ensure_services
+    @check_vector_store_loaded
     async def ask_question(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         user_prompt = update.message.text
@@ -693,10 +548,6 @@ class BotHandlers:
         conversation_id = str(uuid.uuid4())
 
         db_service = context.user_data.get("db_service")
-        if not db_service:
-            db_service = DatabaseService()
-            context.user_data["db_service"] = db_service
-
         db_service.save_message(conversation_id, "user", user_id, user_prompt)
 
         chat_history_texts = db_service.get_chat_history(CHAT_HISTORY_LEVEL, user_id)
@@ -704,9 +555,6 @@ class BotHandlers:
         chat_history = messages_to_langchain_messages(chat_history_texts)
 
         llm_service = context.user_data.get("llm_service")
-        if not llm_service:
-            llm_service = LLMService()
-            context.user_data["llm_service"] = llm_service
 
         try:
             response, source_files = llm_service.generate_response(
@@ -714,16 +562,12 @@ class BotHandlers:
             )
         except Exception as e:
             logging.error(f"Error during generate_response: {e}")
-            system_response = "An error occurred while processing your question. Please try again later."
+            system_response = (
+                "An error occurred while processing your question. Please try again later."
+            )
             await update.message.reply_text(system_response)
             # Save event log
-            db_service.save_event_log(
-                user_id=user_id,
-                event_type="ai_conversation",
-                user_message=user_prompt,
-                system_response=system_response,
-                conversation_id=conversation_id,
-            )
+            db_service.save_event_log(user_id, "ai_conversation", user_prompt, system_response, conversation_id)
             return ConversationHandler.END
 
         # Prepare the bot's response
@@ -744,36 +588,32 @@ class BotHandlers:
         db_service.save_message(conversation_id, "bot", None, bot_message)
 
         # Save event log
-        db_service.save_event_log(
-            user_id=user_id,
-            event_type="ai_conversation",
-            user_message=user_prompt,
-            system_response=bot_message,
-            conversation_id=conversation_id,
-        )
+        db_service.save_event_log(user_id, "ai_conversation", user_prompt, bot_message, conversation_id)
 
         return ConversationHandler.END
 
-    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    @ensure_services
+    @check_vector_store_loaded
+    async def handle_message(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ):
         """Handle any text message sent by the user."""
 
         db_service = context.user_data.get("db_service")
-        if not db_service:
-            db_service = DatabaseService()
-            context.user_data["db_service"] = db_service
         llm_service = context.user_data.get("llm_service")
-        if not llm_service:
-            llm_service = LLMService()
-            context.user_data["llm_service"] = llm_service
 
         if not context.user_data.get("vector_store_loaded", False):
-            system_response = "Documents are not indexed yet. Use /folder or /knowledge_base first."
+            system_response = (
+                "Documents are not indexed yet. Use /folder or /knowledge_base first."
+            )
             await update.message.reply_text(system_response)
             return
 
         valid_files_in_folder = context.user_data.get("valid_files_in_folder", [])
         if not valid_files_in_folder:
-            system_response = "No valid documents found in the folder. Please add documents to the folder."
+            system_response = (
+                "No valid documents found in the folder. Please add documents to the folder."
+            )
             await update.message.reply_text(system_response)
             return
 
@@ -789,22 +629,18 @@ class BotHandlers:
         chat_history = messages_to_langchain_messages(chat_history_texts)
 
         try:
-            response, source_files = llm_service.generate_response(user_message, chat_history=chat_history)
+            response, source_files = llm_service.generate_response(user_message, chat_history)
         except Exception as e:
             logging.error(f"Error during generate_response: {e}")
-            system_response = "An error occurred while processing your message. Please try again later."
+            system_response = (
+                "An error occurred while processing your message. Please try again later."
+            )
             await update.message.reply_text(system_response)
             # Save event log
-            db_service.save_event_log(
-                user_id=user_id,
-                event_type="ai_conversation",
-                user_message=user_message,
-                system_response=system_response,
-                conversation_id=conversation_id,
-            )
+            db_service.save_event_log(user_id, "ai_conversation", user_message, system_response, conversation_id)
             return ConversationHandler.END
 
-            # Prepare the bot's response
+        # Prepare the bot's response
         bot_message = f"{response}\n\nReferences:"
 
         if source_files:
@@ -822,33 +658,130 @@ class BotHandlers:
         db_service.save_message(conversation_id, "bot", None, bot_message)
 
         # Save event log
-        db_service.save_event_log(
-            user_id=user_id,
-            event_type="ai_conversation",
-            user_message=user_message,
-            system_response=bot_message,
-            conversation_id=conversation_id,
-        )
+        db_service.save_event_log(user_id, "ai_conversation", user_message, bot_message, conversation_id)
 
+    @ensure_services
     async def send_file(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
         data = query.data
         if data.startswith("get_file:"):
-            file_name = data[len("get_file:"):]
+            file_name = data[len("get_file:") :]
             folder_path = context.user_data.get("folder_path")
             if folder_path:
                 file_path = os.path.join(folder_path, file_name)
                 if os.path.isfile(file_path):
                     try:
-                        with open(file_path, 'rb') as f:
-                            await query.message.reply_document(document=f, filename=file_name)
+                        with open(file_path, "rb") as f:
+                            await query.message.reply_document(
+                                document=f, filename=file_name
+                            )
                     except Exception as e:
                         logging.error(f"Error sending file: {e}")
-                        await query.message.reply_text("An error occurred while sending the file.")
+                        await query.message.reply_text(
+                            "An error occurred while sending the file."
+                        )
                 else:
                     await query.message.reply_text("File not found.")
             else:
                 await query.message.reply_text("Folder path not set.")
         else:
             await query.message.reply_text("Unknown command.")
+
+    @ensure_services
+    async def gdrive_folder(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle the /gdrive_folder command."""
+        user_id = update.effective_user.id
+        user_message = "/gdrive_folder"
+        conversation_id = str(uuid.uuid4())
+        system_response = "Please authorize access to your Google Drive by clicking the link below."
+
+        flow = get_flow(str(user_id))
+        auth_url, _ = flow.authorization_url(prompt='consent', include_granted_scopes='true')
+
+        await update.message.reply_text(f"{system_response}\n{auth_url}")
+
+        # Save the flow in context to retrieve later
+        context.user_data['flow'] = flow
+
+        # Save event log
+        db_service = context.user_data.get("db_service")
+        db_service.save_event_log(user_id, "command", user_message, system_response, conversation_id)
+
+        return WAITING_FOR_GDRIVE_FOLDER_ID
+
+    @ensure_services
+    async def set_gdrive_folder(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Set the Google Drive folder after receiving the folder ID from the user."""
+        db_service = context.user_data.get("db_service")
+        llm_service = context.user_data.get("llm_service")
+
+        folder_id = update.message.text.strip()
+        user_id = str(update.effective_user.id)
+        user_name = update.effective_user.full_name
+        user_message = folder_id
+        conversation_id = str(uuid.uuid4())
+
+        # Build the service using user's credentials
+        service = build_service(user_id)
+        if not service:
+            system_response = "Authorization not completed or failed. Please try /gdrive_folder again."
+            await update.message.reply_text(system_response)
+            db_service.save_event_log(user_id, "command", user_message, system_response, conversation_id)
+            return ConversationHandler.END
+
+        # Local folder to store the downloaded files
+        local_folder = os.path.join('/tmp', 'gdrive_files', user_id, folder_id)
+
+        # Download all files in the folder
+        try:
+            download_all_files_in_folder(service, folder_id, local_folder)
+        except Exception as e:
+            logging.error(f"Failed to download files from Google Drive: {e}")
+            system_response = "Failed to download files from Google Drive. Please check the folder ID."
+            await update.message.reply_text(system_response)
+            db_service.save_event_log(user_id, "command", user_message, system_response, conversation_id)
+            return ConversationHandler.END
+
+        # Now proceed as you do with local folders
+        valid_files_in_folder = get_valid_files_in_folder(local_folder)
+        if not valid_files_in_folder:
+            system_response = (
+                "No valid files found in the Google Drive folder. Please provide a folder containing valid documents."
+            )
+            await update.message.reply_text(system_response)
+            db_service.save_event_log(user_id, "command", user_message, system_response, conversation_id)
+            return ConversationHandler.END
+
+        # Set user-specific folder path and process the documents
+        context.user_data["folder_path"] = local_folder
+        context.user_data["valid_files_in_folder"] = valid_files_in_folder
+        index_status = llm_service.load_and_index_documents(local_folder)
+        if index_status != "Documents successfully indexed.":
+            logging.error(f"Error during load_and_index_documents: {index_status}")
+            system_response = (
+                "An error occurred while loading and indexing your documents. Please try again later."
+            )
+            await update.message.reply_text(system_response)
+            db_service.save_event_log(user_id, "command", user_message, system_response, conversation_id)
+            return ConversationHandler.END
+
+        context.user_data["vector_store_loaded"] = True
+
+        # Evaluate token count
+        token_count = llm_service.count_tokens_in_context(local_folder)
+        percentage_full = calculate_percentage_full(token_count, MAX_TOKENS_IN_CONTEXT)
+
+        system_response = (
+            f"Google Drive folder successfully set. Valid files have been downloaded and indexed.\n\n"
+            f"Context storage is {percentage_full:.2f}% full."
+        )
+        await update.message.reply_text(system_response)
+
+        # Save user info in database
+        db_service.save_folder(user_id, user_name, local_folder)
+
+        # Save event log
+        db_service.save_event_log(user_id, "command", user_message, system_response, conversation_id)
+
+        return ConversationHandler.END

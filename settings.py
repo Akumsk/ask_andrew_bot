@@ -25,9 +25,9 @@ PROJECT_PATHS = {
 
 
 FOLLOWING_QUESTIONS = [
-                "What is is it today?",
-                "Tell me the brief about last meeting with client.",
-                "How can I contribute?"
+                "Summarize the last project meeting.",
+                "What are next week's deadlines?",
+                "Analyze project risk potential."
             ]
 
 KNOWLEDGE_BASE_PATH = (

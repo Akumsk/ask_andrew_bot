@@ -10,6 +10,7 @@ from telegram.ext import (
     CallbackQueryHandler,
 )
 from telegram.error import BadRequest
+from oauth2callback import start_server
 
 from settings import TELEGRAM_TOKEN
 from llm_service import LLMService
@@ -59,12 +60,13 @@ def main():
         fallbacks=[],
     )
 
-    project_conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("projects", handlers.projects)],
+    conversation_handler = ConversationHandler(
+        entry_points=[CommandHandler('gdrive_folder', bot_handlers.gdrive_folder)],
         states={
-            WAITING_FOR_PROJECT_SELECTION: [
-                CallbackQueryHandler(handlers.handle_project_selection_callback)
+            WAITING_FOR_GDRIVE_FOLDER_ID: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, bot_handlers.set_gdrive_folder)
             ],
+            # ... other states
         },
         fallbacks=[],
     )
@@ -91,4 +93,5 @@ def main():
 
 
 if __name__ == "__main__":
+    start_server()
     main()
