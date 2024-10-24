@@ -6,7 +6,7 @@ import uuid
 from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
 
-from settings import PROJECT_PATHS, MAX_TOKENS_IN_CONTEXT, KNOWLEDGE_BASE_PATH, CHAT_HISTORY_LEVEL
+from settings import PROJECT_PATHS, MAX_TOKENS_IN_CONTEXT, KNOWLEDGE_BASE_PATH, CHAT_HISTORY_LEVEL, FOLLOWING_QUESTIONS
 from db_service import DatabaseService
 from llm_service import LLMService
 from helpers import messages_to_langchain_messages
@@ -250,6 +250,16 @@ class BotHandlers:
             db_service.save_folder(
                 user_id=user_id, user_name=user_name, folder=folder_path
             )
+
+            # Prepare buttons with the three questions
+            questions = FOLLOWING_QUESTIONS
+            keyboard = [[InlineKeyboardButton(q, callback_data=f"ask_question:{q}")] for q in questions]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.message.reply_text(
+                "You can ask the following questions about the project:",
+                reply_markup=reply_markup
+            )
+
         else:
             system_response = "Invalid selection or project is not available. Please select a valid project."
             await query.edit_message_text(system_response)
@@ -273,6 +283,82 @@ class BotHandlers:
         )
 
         return ConversationHandler.END
+
+    async def handle_question_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle the question buttons after project selection."""
+        query = update.callback_query
+        await query.answer()
+        data = query.data
+        if data.startswith("ask_question:"):
+            question = data[len("ask_question:"):]
+            # Now, process the question as if the user asked it
+
+            user_id = context.user_data.get("user_id")
+            if not user_id:
+                user_id = update.effective_user.id
+                context.user_data["user_id"] = user_id
+
+            conversation_id = str(uuid.uuid4())
+
+            db_service = context.user_data.get("db_service")
+            if not db_service:
+                db_service = DatabaseService()
+                context.user_data["db_service"] = db_service
+
+            db_service.save_message(conversation_id, "user", user_id, question)
+
+            chat_history_texts = db_service.get_chat_history(CHAT_HISTORY_LEVEL, user_id)
+            # Convert chat_history_texts to list of HumanMessage and AIMessage
+            chat_history = messages_to_langchain_messages(chat_history_texts)
+
+            llm_service = context.user_data.get("llm_service")
+            if not llm_service:
+                llm_service = LLMService()
+                context.user_data["llm_service"] = llm_service
+
+            try:
+                response, source_files = llm_service.generate_response(
+                    question, chat_history=chat_history
+                )
+            except Exception as e:
+                logging.error(f"Error during generate_response: {e}")
+                system_response = "An error occurred while processing your question. Please try again later."
+                await query.message.reply_text(system_response)
+                # Save event log
+                db_service.save_event_log(
+                    user_id=user_id,
+                    event_type="ai_conversation",
+                    user_message=question,
+                    system_response=system_response,
+                    conversation_id=conversation_id,
+                )
+                return
+
+            # Prepare the bot's response
+            bot_message = f"{response}\n\nReferences:"
+
+            if source_files:
+                # Create buttons for each source file
+                keyboard = [
+                    [InlineKeyboardButton(file, callback_data=f"get_file:{file}")]
+                    for file in source_files
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await query.message.reply_text(bot_message, reply_markup=reply_markup)
+            else:
+                await query.message.reply_text(response)
+
+            # Save the bot's message
+            db_service.save_message(conversation_id, "bot", None, bot_message)
+
+            # Save event log
+            db_service.save_event_log(
+                user_id=user_id,
+                event_type="ai_conversation",
+                user_message=question,
+                system_response=bot_message,
+                conversation_id=conversation_id,
+            )
 
     async def status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the /status command."""
