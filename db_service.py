@@ -82,12 +82,12 @@ class DatabaseService:
             if timestamp is None:
                 timestamp = datetime.now()
             query = """
-                INSERT INTO event_log (user_id, event_type, user_message, system_response, timestamp, conversation_id)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                INSERT INTO event_log (user_id, event_type, user_message, system_response, conversation_id)
+                VALUES (%s, %s, %s, %s, %s)
             """
             cursor.execute(
                 query,
-                (user_id, event_type, user_message, system_response, timestamp, conversation_id),
+                (user_id, event_type, user_message, system_response, conversation_id),
             )
             connection.commit()
             print("Event log saved successfully.")
