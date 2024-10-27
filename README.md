@@ -3,6 +3,7 @@ Welcome to the AI Document Assistant Bot! This Telegram bot allows users to inte
 
 
 Pipeline:
-1) Adjust Reference list from most relevant
-2) Create filter docs for indexing
-3) Create tools: Project_Analyzer and Doc_Searcher
+1) Adjust Reference list from most relevant - done
+2) Request for tg Auth, user permitions 
+3) Save loading time in log
+4) Create tools: Project_Analyzer and Doc_Searcher

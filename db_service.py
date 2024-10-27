@@ -21,6 +21,8 @@ class DatabaseService:
         self.password = db_password
         self.host = db_host
         self.port = db_port
+        self.conn = self.connect()
+        self.conn.autocommit = True
 
     def connect(self):
         return psycopg2.connect(
@@ -30,7 +32,6 @@ class DatabaseService:
             host=self.host,
             port=self.port,
         )
-
 
     def save_folder(self, user_id, user_name, folder):
         try:
@@ -222,9 +223,75 @@ class DatabaseService:
             if connection:
                 connection.close()
 
+    def check_user_access(self, user_id):
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                "SELECT access FROM users WHERE user_id = %s AND is_active = True",
+                (user_id,)
+            )
+            result = cursor.fetchone()
+            if result:
+                return result[0]  # True or False
+            else:
+                return False
+        except Exception as e:
+            print(f"Error checking user access: {e}")
+            return False
+        finally:
+            cursor.close()
 
-# # Instantiate the DatabaseService class
-# db_service = DatabaseService()
-#
-# test_chat_history = db_service.chat_history_from_db(user_id=244732168, dialog_numbers=2)
-# print(test_chat_history)
+    def save_user_info(self, user_id, user_name, language_code):
+        now = datetime.utcnow()
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO users (user_id, user_name, language_code, date_joined, last_active, is_active, access, role)
+                VALUES (%s, %s, %s, %s, %s, True, False, 'user')
+                ON CONFLICT (user_id) DO UPDATE
+                SET user_name = EXCLUDED.user_name,
+                    language_code = EXCLUDED.language_code,
+                    last_active = EXCLUDED.last_active
+                """,
+                (user_id, user_name, language_code, now, now)
+            )
+            print("User info saved/updated successfully.")
+        except Exception as e:
+            print(f"Error saving user info: {e}")
+            self.conn.rollback()
+        finally:
+            cursor.close()
+
+    def update_last_active(self, user_id):
+        now = datetime.utcnow()
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                "UPDATE users SET last_active = %s WHERE user_id = %s",
+                (now, user_id)
+            )
+            print("User last_active updated.")
+        except Exception as e:
+            print(f"Error updating last_active: {e}")
+            self.conn.rollback()
+        finally:
+            cursor.close()
+
+    def grant_access(self, user_id):
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                "UPDATE users SET access = True WHERE user_id = %s",
+                (user_id,)
+            )
+            print(f"Access granted to user {user_id}.")
+        except Exception as e:
+            print(f"Error granting access: {e}")
+            self.conn.rollback()
+        finally:
+            cursor.close()
+
+    def close(self):
+        self.conn.close()
+

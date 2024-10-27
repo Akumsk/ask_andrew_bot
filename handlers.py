@@ -10,7 +10,62 @@ from settings import PROJECT_PATHS, MAX_TOKENS_IN_CONTEXT, KNOWLEDGE_BASE_PATH, 
 from db_service import DatabaseService
 from llm_service import LLMService
 from helpers import messages_to_langchain_messages
+from auth import AuthService
 
+# Decorators:
+
+def authorized_only(func):
+    async def wrapper(self, update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
+        user = update.effective_user
+        user_id = user.id
+        user_name = user.full_name
+        language_code = user.language_code
+
+        # Initialize db_service in context if not already present
+        if 'db_service' not in context.user_data:
+            context.user_data['db_service'] = DatabaseService()
+
+        # Save or update user info
+        self.auth_service.save_user_info(user_id, user_name, language_code)
+
+        # Check if user has access
+        if not self.auth_service.check_user_access(user_id):
+            if update.message:
+                await update.message.reply_text("You do not have access, please make the /request_access.")
+            elif update.callback_query:
+                await update.callback_query.answer("You do not have access, please make the /request_access.", show_alert=True)
+            return
+        else:
+            # Update last_active
+            self.auth_service.update_last_active(user_id)
+
+        return await func(self, update, context, *args, **kwargs)
+    return wrapper
+
+def initialize_services(func):
+    async def wrapper(self, update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
+        if 'db_service' not in context.user_data:
+            context.user_data['db_service'] = DatabaseService()
+        if 'llm_service' not in context.user_data:
+            context.user_data['llm_service'] = LLMService()
+        if 'user_id' not in context.user_data:
+            context.user_data['user_id'] = update.effective_user.id
+        return await func(self, update, context, *args, **kwargs)
+    return wrapper
+
+def ensure_documents_indexed(func):
+    async def wrapper(self, update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
+        if not context.user_data.get("vector_store_loaded", False):
+            system_response = "Documents are not indexed yet. Use /folder or /knowledge_base first."
+            await update.message.reply_text(system_response)
+            return ConversationHandler.END
+        valid_files_in_folder = context.user_data.get("valid_files_in_folder", [])
+        if not valid_files_in_folder:
+            system_response = "No valid documents found in the folder. Please add documents to the folder."
+            await update.message.reply_text(system_response)
+            return ConversationHandler.END
+        return await func(self, update, context, *args, **kwargs)
+    return wrapper
 
 WAITING_FOR_FOLDER_PATH, WAITING_FOR_QUESTION, WAITING_FOR_PROJECT_SELECTION = range(3)
 
@@ -23,7 +78,7 @@ class User:
 
 class BotHandlers:
     def __init__(self):
-        pass
+        self.auth_service = AuthService()
 
     async def post_init(self, application):
         commands = [
@@ -33,21 +88,25 @@ class BotHandlers:
             BotCommand("ask", "Ask a question about documents"),
             BotCommand("status", "Display current status and information"),
             BotCommand("knowledge_base", "Set context to knowledge base"),
+            BotCommand("request_access", "Request access to the bot"),
+            BotCommand("grant_access", "Grant access to a user (Admin only)"),
         ]
         await application.bot.set_my_commands(commands)
 
+    @initialize_services
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user_id = update.effective_user.id
-        user_name = update.effective_user.full_name
+        user = update.effective_user
+        user_id = user.id
+        user_name = user.full_name
+        language_code = user.language_code
         user_message = '/start'
         conversation_id = str(uuid.uuid4())
 
-        db_service = DatabaseService()
-        llm_service = LLMService()
+        # Save or update user info
+        self.auth_service.save_user_info(user_id, user_name, language_code)
 
-        context.user_data["db_service"] = db_service
-        context.user_data["llm_service"] = llm_service
-        context.user_data["user_id"] = user_id  # Store user_id for future use
+        db_service = context.user_data["db_service"]
+        llm_service = context.user_data["llm_service"]
 
         # Try to get the last folder from the database for the user
         last_folder = db_service.get_last_folder(user_id)
@@ -120,6 +179,8 @@ class BotHandlers:
             conversation_id=conversation_id,
         )
 
+    @authorized_only
+    @initialize_services
     async def projects(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the /projects command."""
         user_id = update.effective_user.id
@@ -135,11 +196,7 @@ class BotHandlers:
         await update.message.reply_text(system_response, reply_markup=reply_markup)
 
         # Save event log
-        db_service = context.user_data.get("db_service")
-        if not db_service:
-            db_service = DatabaseService()
-            context.user_data["db_service"] = db_service
-
+        db_service = context.user_data["db_service"]
         db_service.save_event_log(
             user_id=user_id,
             event_type="command",
@@ -148,17 +205,18 @@ class BotHandlers:
             conversation_id=conversation_id,
         )
 
+
         return WAITING_FOR_PROJECT_SELECTION
 
+    @authorized_only
+    @initialize_services
     async def handle_project_selection_callback(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ):
         """Handle project selection via callback data after /projects command."""
 
-        db_service = context.user_data.get("db_service")
-        if not db_service:
-            db_service = DatabaseService()
-            context.user_data["db_service"] = db_service
+        db_service = context.user_data["db_service"]
+        llm_service = context.user_data["llm_service"]
 
         llm_service = context.user_data.get("llm_service")
         if not llm_service:
@@ -284,6 +342,8 @@ class BotHandlers:
 
         return ConversationHandler.END
 
+    @authorized_only
+    @initialize_services
     async def handle_question_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the question buttons after project selection."""
         query = update.callback_query
@@ -293,28 +353,17 @@ class BotHandlers:
             question = data[len("ask_question:"):]
             # Now, process the question as if the user asked it
 
-            user_id = context.user_data.get("user_id")
-            if not user_id:
-                user_id = update.effective_user.id
-                context.user_data["user_id"] = user_id
-
+            user_id = context.user_data["user_id"]
             conversation_id = str(uuid.uuid4())
 
-            db_service = context.user_data.get("db_service")
-            if not db_service:
-                db_service = DatabaseService()
-                context.user_data["db_service"] = db_service
-
+            db_service = context.user_data["db_service"]
             db_service.save_message(conversation_id, "user", user_id, question)
 
             chat_history_texts = db_service.get_chat_history(CHAT_HISTORY_LEVEL, user_id)
             # Convert chat_history_texts to list of HumanMessage and AIMessage
             chat_history = messages_to_langchain_messages(chat_history_texts)
 
-            llm_service = context.user_data.get("llm_service")
-            if not llm_service:
-                llm_service = LLMService()
-                context.user_data["llm_service"] = llm_service
+            llm_service = context.user_data["llm_service"]
 
             try:
                 response, source_files = llm_service.generate_response(
@@ -350,7 +399,6 @@ class BotHandlers:
 
             # Save the bot's message
             db_service.save_message(conversation_id, "bot", None, bot_message)
-
             # Save event log
             db_service.save_event_log(
                 user_id=user_id,
@@ -360,15 +408,13 @@ class BotHandlers:
                 conversation_id=conversation_id,
             )
 
+    @authorized_only
+    @initialize_services
     async def status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the /status command."""
-        llm_service = context.user_data.get("llm_service")
-        if not llm_service:
-            llm_service = LLMService()
-            context.user_data["llm_service"] = llm_service
-
+        llm_service = context.user_data["llm_service"]
         user_name = update.effective_user.full_name
-        user_id = update.effective_user.id
+        user_id = context.user_data["user_id"]
         user_message = '/status'
         conversation_id = str(uuid.uuid4())
         folder_path = context.user_data.get("folder_path", "")
@@ -415,10 +461,6 @@ class BotHandlers:
 
             # Save event log
         db_service = context.user_data.get("db_service")
-        if not db_service:
-            db_service = DatabaseService()
-            context.user_data["db_service"] = db_service
-
         db_service.save_event_log(
             user_id=user_id,
             event_type="command",
@@ -427,6 +469,8 @@ class BotHandlers:
             conversation_id=conversation_id,
         )
 
+    @authorized_only
+    @initialize_services
     async def folder(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the /folder command."""
         user_id = update.effective_user.id
@@ -436,11 +480,7 @@ class BotHandlers:
         await update.message.reply_text(system_response)
 
         # Save event log
-        db_service = context.user_data.get("db_service")
-        if not db_service:
-            db_service = DatabaseService()
-            context.user_data["db_service"] = db_service
-
+        db_service = context.user_data["db_service"]
         db_service.save_event_log(
             user_id=user_id,
             event_type="command",
@@ -451,20 +491,15 @@ class BotHandlers:
 
         return WAITING_FOR_FOLDER_PATH
 
+    @authorized_only
+    @initialize_services
     async def set_folder(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Set the folder path after receiving it from the user."""
-        db_service = context.user_data.get("db_service")
-        if not db_service:
-            db_service = DatabaseService()
-            context.user_data["db_service"] = db_service
-
-        llm_service = context.user_data.get("llm_service")
-        if not llm_service:
-            llm_service = LLMService()
-            context.user_data["llm_service"] = llm_service
+        db_service = context.user_data["db_service"]
+        llm_service = context.user_data["llm_service"]
 
         folder_path = update.message.text.strip()
-        user_id = update.effective_user.id
+        user_id = context.user_data["user_id"]
         user_name = update.effective_user.full_name
         user_message = folder_path
         conversation_id = str(uuid.uuid4())
@@ -549,21 +584,16 @@ class BotHandlers:
 
         return ConversationHandler.END
 
+    @authorized_only
+    @initialize_services
     async def knowledge_base(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the /knowledge_base command."""
 
-        db_service = context.user_data.get("db_service")
-        if not db_service:
-            db_service = DatabaseService()
-            context.user_data["db_service"] = db_service
-
-        llm_service = context.user_data.get("llm_service")
-        if not llm_service:
-            llm_service = LLMService()
-            context.user_data["llm_service"] = llm_service
+        db_service = context.user_data["db_service"]
+        llm_service = context.user_data["llm_service"]
 
         folder_path = KNOWLEDGE_BASE_PATH
-        user_id = update.effective_user.id
+        user_id = context.user_data["user_id"]
         user_name = update.effective_user.full_name
         user_message = '/knowledge_base'
         conversation_id = str(uuid.uuid4())
@@ -646,18 +676,11 @@ class BotHandlers:
             conversation_id=conversation_id,
         )
 
+    @authorized_only
+    @initialize_services
+    @ensure_documents_indexed
     async def ask(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the /ask command."""
-        if not context.user_data.get("vector_store_loaded", False):
-            system_response = "Documents are not indexed yet. Use /folder or /knowledge_base first."
-            await update.message.reply_text(system_response)
-            return ConversationHandler.END
-
-        valid_files_in_folder = context.user_data.get("valid_files_in_folder", [])
-        if not valid_files_in_folder:
-            system_response = "No valid documents found in the folder. Please add documents to the folder."
-            await update.message.reply_text(system_response)
-            return ConversationHandler.END
 
         system_response = "Please provide the question you want to ask about the documents:"
         await update.message.reply_text(system_response)
@@ -681,32 +704,23 @@ class BotHandlers:
 
         return WAITING_FOR_QUESTION
 
+    @authorized_only
+    @initialize_services
+    @ensure_documents_indexed
     async def ask_question(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         user_prompt = update.message.text
-        user_id = context.user_data.get("user_id")
-
-        if not user_id:
-            user_id = update.effective_user.id
-            context.user_data["user_id"] = user_id
-
+        user_id = context.user_data["user_id"]
         conversation_id = str(uuid.uuid4())
 
-        db_service = context.user_data.get("db_service")
-        if not db_service:
-            db_service = DatabaseService()
-            context.user_data["db_service"] = db_service
-
+        db_service = context.user_data["db_service"]
         db_service.save_message(conversation_id, "user", user_id, user_prompt)
 
         chat_history_texts = db_service.get_chat_history(CHAT_HISTORY_LEVEL, user_id)
         # Convert chat_history_texts to list of HumanMessage and AIMessage
         chat_history = messages_to_langchain_messages(chat_history_texts)
 
-        llm_service = context.user_data.get("llm_service")
-        if not llm_service:
-            llm_service = LLMService()
-            context.user_data["llm_service"] = llm_service
+        llm_service = context.user_data["llm_service"]
 
         try:
             response, source_files = llm_service.generate_response(
@@ -754,31 +768,16 @@ class BotHandlers:
 
         return ConversationHandler.END
 
+    @authorized_only
+    @initialize_services
+    @ensure_documents_indexed
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle any text message sent by the user."""
 
-        db_service = context.user_data.get("db_service")
-        if not db_service:
-            db_service = DatabaseService()
-            context.user_data["db_service"] = db_service
-        llm_service = context.user_data.get("llm_service")
-        if not llm_service:
-            llm_service = LLMService()
-            context.user_data["llm_service"] = llm_service
-
-        if not context.user_data.get("vector_store_loaded", False):
-            system_response = "Documents are not indexed yet. Use /folder or /knowledge_base first."
-            await update.message.reply_text(system_response)
-            return
-
-        valid_files_in_folder = context.user_data.get("valid_files_in_folder", [])
-        if not valid_files_in_folder:
-            system_response = "No valid documents found in the folder. Please add documents to the folder."
-            await update.message.reply_text(system_response)
-            return
-
+        db_service = context.user_data["db_service"]
+        llm_service = context.user_data["llm_service"]
         user_message = update.message.text
-        user_id = update.effective_user.id
+        user_id = context.user_data["user_id"]
         conversation_id = str(uuid.uuid4())
 
         # Save the user's message
@@ -830,6 +829,8 @@ class BotHandlers:
             conversation_id=conversation_id,
         )
 
+    @authorized_only
+    @initialize_services
     async def send_file(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
@@ -852,3 +853,38 @@ class BotHandlers:
                 await query.message.reply_text("Folder path not set.")
         else:
             await query.message.reply_text("Unknown command.")
+
+    async def request_access(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user = update.effective_user
+        user_id = user.id
+        user_name = user.full_name
+        username = user.username
+        language_code = user.language_code
+
+        # Initialize db_service in context if not already present
+        if 'db_service' not in context.user_data:
+            context.user_data['db_service'] = DatabaseService()
+
+        # Save or update user info
+        self.auth_service.save_user_info(user_id, user_name, language_code)
+
+        # Send a notification to the admin
+        admin_id = os.getenv("ADMIN_TELEGRAM_ID")
+        message = f"Access request from {user_name} (@{username}), ID: {user_id}"
+        await context.bot.send_message(chat_id=admin_id, text=message)
+
+        # Inform the user
+        await update.message.reply_text("Your access request has been sent to the admin.")
+
+    async def grant_access(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        admin_id = update.effective_user.id
+        if str(admin_id) != os.getenv("ADMIN_TELEGRAM_ID"):
+            await update.message.reply_text("You are not authorized to perform this action.")
+            return
+
+        try:
+            user_id_to_grant = int(context.args[0])
+            self.auth_service.grant_access(user_id_to_grant)
+            await update.message.reply_text(f"User {user_id_to_grant} has been granted access.")
+        except (IndexError, ValueError):
+            await update.message.reply_text("Usage: /grant_access <user_id>")
