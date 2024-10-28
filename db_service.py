@@ -168,42 +168,38 @@ class DatabaseService:
 
             # Step 1: Get the last 'dialog_numbers' conversation_ids for the user
             query_conversation_ids = """
-                SELECT conversation_id, MAX(timestamp) as last_timestamp
+                SELECT conversation_id, MAX(date + timestamp) as last_datetime
                 FROM messages
                 WHERE user_id = %s AND sender_type = 'user'
                 GROUP BY conversation_id
-                ORDER BY last_timestamp DESC
+                ORDER BY last_datetime DESC
                 LIMIT %s
             """
 
             cursor.execute(query_conversation_ids, (user_id, dialog_numbers))
             conversation_data = cursor.fetchall()
-            conversation_ids = [
-                str(row[0]) for row in conversation_data
-            ]
+            conversation_ids = [str(row[0]) for row in conversation_data]
 
             if not conversation_ids:
                 return []
 
-            # Step 2: Prepare the list of conversation_ids as a string for SQL
-            conversation_ids_str = "{" + ",".join(conversation_ids) + "}"
-
+            # Step 2: Fetch messages for these conversation_ids, ordered by datetime
             query_messages = """
-                SELECT conversation_id, sender_type, message_text, timestamp
+                SELECT conversation_id, sender_type, message_text, date + timestamp as datetime
                 FROM messages
                 WHERE conversation_id = ANY(%s::uuid[])
-                ORDER BY conversation_id, timestamp ASC
+                ORDER BY conversation_id, datetime ASC
             """
-            cursor.execute(query_messages, (conversation_ids_str,))
+            cursor.execute(query_messages, (conversation_ids,))
             messages = cursor.fetchall()
 
             conversations = defaultdict(list)
-            for conversation_id, sender_type, message_text, timestamp in messages:
+            for conversation_id, sender_type, message_text, datetime in messages:
                 conversations[str(conversation_id)].append((sender_type, message_text))
 
-            # Step 4: Construct the chat history
+            # Step 3: Construct the chat history
             chat_history = []
-            # Maintain the order of conversation_ids as per their timestamp descending
+            # Maintain the order of conversation_ids as per their datetime descending
             for conversation_id in conversation_ids:
                 conversation = conversations.get(conversation_id, [])
                 for sender_type, message_text in conversation:
@@ -215,7 +211,8 @@ class DatabaseService:
             return chat_history
 
         except Exception as e:
-            print(f"Error fetching chat history: {e}")
+            # Handle exceptions
+            print(f"An error occurred: {e}")
             return []
         finally:
             if cursor:
