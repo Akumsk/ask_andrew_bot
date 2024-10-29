@@ -49,6 +49,10 @@ def initialize_services(func):
             context.user_data['llm_service'] = LLMService()
         if 'user_id' not in context.user_data:
             context.user_data['user_id'] = update.effective_user.id
+        if 'user_name' not in context.user_data:
+            context.user_data['user_name'] = update.effective_user.full_name
+        if 'language_code' not in context.user_data:
+            context.user_data['language_code'] = update.effective_user.language_code
         return await func(self, update, context, *args, **kwargs)
     return wrapper
 
@@ -69,17 +73,19 @@ def ensure_documents_indexed(func):
 def log_event(event_type):
     def decorator(func):
         async def wrapper(self, update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
-            # Before execution
-            user = update.effective_user
-            user_id = user.id
+            # Before executing the handler function
+            user_id = update.effective_user.id
             user_message = update.message.text if update.message else ''
             conversation_id = str(uuid.uuid4())
 
             # Execute the handler function
             result = await func(self, update, context, *args, **kwargs)
 
-            # After execution
+            # After executing the handler function
+            # Retrieve system_response from context.user_data
             system_response = context.user_data.get('system_response', '')
+
+            # Access db_service
             db_service = context.user_data.get('db_service')
             if db_service:
                 db_service.save_event_log(
@@ -97,13 +103,6 @@ def log_event(event_type):
     return decorator
 
 WAITING_FOR_FOLDER_PATH, WAITING_FOR_QUESTION, WAITING_FOR_PROJECT_SELECTION = range(3)
-
-
-class User:
-    def __init__(self, update: Update):
-        self.user_id = update.effective_user.id
-        self.user_name = update.effective_user.full_name
-
 
 class BotHandlers:
     def __init__(self):
@@ -123,13 +122,11 @@ class BotHandlers:
         await application.bot.set_my_commands(commands)
 
     @initialize_services
+    @log_event(event_type='command')
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user = update.effective_user
-        user_id = user.id
-        user_name = user.full_name
-        language_code = user.language_code
-        user_message = '/start'
-        conversation_id = str(uuid.uuid4())
+        user_id = context.user_data['user_id']
+        user_name = context.user_data['user_name']
+        language_code = context.user_data['language_code']
 
         # Save or update user info
         self.auth_service.save_user_info(user_id, user_name, language_code)
@@ -199,20 +196,17 @@ class BotHandlers:
                 "Send any message without a command to ask a question."
             )
             await update.message.reply_text(system_response)
-        # Save event log
-        db_service.save_event_log(
-            user_id=user_id,
-            event_type="command",
-            user_message=user_message,
-            system_response=system_response,
-            conversation_id=conversation_id,
-        )
+
+        # Store system_response in context.user_data
+        context.user_data['system_response'] = system_response
 
     @authorized_only
     @initialize_services
+    @log_event(event_type='command')
     async def projects(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the /projects command."""
-        user_id = update.effective_user.id
+
+        user_id = context.user_data['user_id']
         conversation_id = str(uuid.uuid4())
         user_message = '/projects'
 
@@ -222,23 +216,17 @@ class BotHandlers:
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         system_response = "Please select a project:"
+
         await update.message.reply_text(system_response, reply_markup=reply_markup)
 
-        # Save event log
-        db_service = context.user_data["db_service"]
-        db_service.save_event_log(
-            user_id=user_id,
-            event_type="command",
-            user_message=user_message,
-            system_response=system_response,
-            conversation_id=conversation_id,
-        )
-
+        # Store system_response in context.user_data
+        context.user_data['system_response'] = system_response
 
         return WAITING_FOR_PROJECT_SELECTION
 
     @authorized_only
     @initialize_services
+    @log_event(event_type='command')
     async def handle_project_selection_callback(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ):
@@ -247,36 +235,20 @@ class BotHandlers:
         db_service = context.user_data["db_service"]
         llm_service = context.user_data["llm_service"]
 
-        llm_service = context.user_data.get("llm_service")
-        if not llm_service:
-            llm_service = LLMService()
-            context.user_data["llm_service"] = llm_service
-
         query = update.callback_query
         await query.answer()
         user_choice = query.data
         user_id = query.from_user.id
-        conversation_id = str(uuid.uuid4())
-        user_message = user_choice
+        user_name = query.from_user.full_name
 
         folder_path = PROJECT_PATHS.get(user_choice)
 
         if folder_path:
-            user_id = update.effective_user.id
-            user_name = update.effective_user.full_name
-
             # Check if the folder path exists
             if not os.path.isdir(folder_path):
                 system_response = "The selected project's folder path does not exist."
                 await query.edit_message_text(system_response)
-                # Save event log
-                db_service.save_event_log(
-                    user_id=user_id,
-                    event_type="command",
-                    user_message=user_message,
-                    system_response=system_response,
-                    conversation_id=conversation_id,
-                )
+                context.user_data['system_response'] = system_response
                 return ConversationHandler.END
 
             # Check for valid files
@@ -288,14 +260,9 @@ class BotHandlers:
             if not valid_files_in_folder:
                 system_response = "No valid files found in the selected project's folder."
                 await query.edit_message_text(system_response)
-                # Save event log
-                db_service.save_event_log(
-                    user_id=user_id,
-                    event_type="command",
-                    user_message=user_message,
-                    system_response=system_response,
-                    conversation_id=conversation_id,
-                )
+
+                context.user_data['system_response'] = system_response
+
                 return ConversationHandler.END
 
             # Set user-specific folder path and process the documents
@@ -306,14 +273,7 @@ class BotHandlers:
                 logging.error(f"Error during load_and_index_documents: {index_status}")
                 system_response = "An error occurred while loading and indexing the project documents. Please try again later."
                 await query.edit_message_text(system_response)
-                # Save event log
-                db_service.save_event_log(
-                    user_id=user_id,
-                    event_type="command",
-                    user_message=user_message,
-                    system_response=system_response,
-                    conversation_id=conversation_id,
-                )
+                context.user_data['system_response'] = system_response
                 return ConversationHandler.END
 
             context.user_data["vector_store_loaded"] = True
@@ -350,29 +310,16 @@ class BotHandlers:
         else:
             system_response = "Invalid selection or project is not available. Please select a valid project."
             await query.edit_message_text(system_response)
-            # Save event log
-            db_service.save_event_log(
-                user_id=user_id,
-                event_type="command",
-                user_message=user_message,
-                system_response=system_response,
-                conversation_id=conversation_id,
-            )
-            return ConversationHandler.END
 
-            # Save event log
-        db_service.save_event_log(
-            user_id=user_id,
-            event_type="command",
-            user_message=user_message,
-            system_response=system_response,
-            conversation_id=conversation_id,
-        )
+            context.user_data['system_response'] = system_response
+
+            return ConversationHandler.END
 
         return ConversationHandler.END
 
     @authorized_only
     @initialize_services
+    @log_event(event_type='ai_conversation')
     async def handle_question_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the question buttons after project selection."""
         query = update.callback_query
@@ -402,14 +349,8 @@ class BotHandlers:
                 logging.error(f"Error during generate_response: {e}")
                 system_response = "An error occurred while processing your question. Please try again later."
                 await query.message.reply_text(system_response)
-                # Save event log
-                db_service.save_event_log(
-                    user_id=user_id,
-                    event_type="ai_conversation",
-                    user_message=question,
-                    system_response=system_response,
-                    conversation_id=conversation_id,
-                )
+
+                context.user_data['system_response'] = system_response
                 return
 
             # Prepare the bot's response
@@ -428,17 +369,11 @@ class BotHandlers:
 
             # Save the bot's message
             db_service.save_message(conversation_id, "bot", None, bot_message)
-            # Save event log
-            db_service.save_event_log(
-                user_id=user_id,
-                event_type="ai_conversation",
-                user_message=question,
-                system_response=bot_message,
-                conversation_id=conversation_id,
-            )
+            context.user_data['system_response'] = bot_message
 
     @authorized_only
     @initialize_services
+    @log_event(event_type='command')
     async def status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the /status command."""
         llm_service = context.user_data["llm_service"]
@@ -490,16 +425,11 @@ class BotHandlers:
 
             # Save event log
         db_service = context.user_data.get("db_service")
-        db_service.save_event_log(
-            user_id=user_id,
-            event_type="command",
-            user_message=user_message,
-            system_response=system_response,
-            conversation_id=conversation_id,
-        )
+        context.user_data['system_response'] = system_response
 
     @authorized_only
     @initialize_services
+    @log_event(event_type='command')
     async def folder(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the /folder command."""
         user_id = update.effective_user.id
@@ -510,18 +440,13 @@ class BotHandlers:
 
         # Save event log
         db_service = context.user_data["db_service"]
-        db_service.save_event_log(
-            user_id=user_id,
-            event_type="command",
-            user_message=user_message,
-            system_response=system_response,
-            conversation_id=conversation_id,
-        )
+        context.user_data['system_response'] = system_response
 
         return WAITING_FOR_FOLDER_PATH
 
     @authorized_only
     @initialize_services
+    @log_event(event_type='command')
     async def set_folder(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Set the folder path after receiving it from the user."""
         db_service = context.user_data["db_service"]
@@ -538,13 +463,7 @@ class BotHandlers:
             system_response = "Invalid folder path. Please provide a valid path."
             await update.message.reply_text(system_response)
             # Save event log
-            db_service.save_event_log(
-                user_id=user_id,
-                event_type="command",
-                user_message=user_message,
-                system_response=system_response,
-                conversation_id=conversation_id,
-            )
+            context.user_data['system_response'] = system_response
             return ConversationHandler.END
 
         # Check for valid files
@@ -555,13 +474,7 @@ class BotHandlers:
             system_response = "No valid files found in the folder. Please provide a folder containing valid documents."
             await update.message.reply_text(system_response)
             # Save event log
-            db_service.save_event_log(
-                user_id=user_id,
-                event_type="command",
-                user_message=user_message,
-                system_response=system_response,
-                conversation_id=conversation_id,
-            )
+            context.user_data['system_response'] = system_response
             return ConversationHandler.END
 
         # Set user-specific folder path and process the documents
@@ -573,13 +486,7 @@ class BotHandlers:
             system_response = "An error occurred while loading and indexing your documents. Please try again later."
             await update.message.reply_text(system_response)
             # Save event log
-            db_service.save_event_log(
-                user_id=user_id,
-                event_type="command",
-                user_message=user_message,
-                system_response=system_response,
-                conversation_id=conversation_id,
-            )
+            context.user_data['system_response'] = system_response
             return ConversationHandler.END
 
         context.user_data["vector_store_loaded"] = True
@@ -603,18 +510,13 @@ class BotHandlers:
         )
 
         # Save event log
-        db_service.save_event_log(
-            user_id=user_id,
-            event_type="command",
-            user_message=user_message,
-            system_response=system_response,
-            conversation_id=conversation_id,
-        )
+        context.user_data['system_response'] = system_response
 
         return ConversationHandler.END
 
     @authorized_only
     @initialize_services
+    @log_event(event_type='command')
     async def knowledge_base(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the /knowledge_base command."""
 
@@ -632,13 +534,7 @@ class BotHandlers:
             system_response = "The knowledge base folder path does not exist."
             await update.message.reply_text(system_response)
             # Save event log
-            db_service.save_event_log(
-                user_id=user_id,
-                event_type="command",
-                user_message=user_message,
-                system_response=system_response,
-                conversation_id=conversation_id,
-            )
+            context.user_data['system_response'] = system_response
             return
 
         # Check for valid files
@@ -649,13 +545,7 @@ class BotHandlers:
             system_response = "No valid files found in the knowledge base folder."
             await update.message.reply_text(system_response)
             # Save event log
-            db_service.save_event_log(
-                user_id=user_id,
-                event_type="command",
-                user_message=user_message,
-                system_response=system_response,
-                conversation_id=conversation_id,
-            )
+            context.user_data['system_response'] = system_response
             return
 
         # Set user-specific folder path and process the documents
@@ -667,13 +557,7 @@ class BotHandlers:
             system_response = "An error occurred while loading and indexing the knowledge base documents. Please try again later."
             await update.message.reply_text(system_response)
             # Save event log
-            db_service.save_event_log(
-                user_id=user_id,
-                event_type="command",
-                user_message=user_message,
-                system_response=system_response,
-                conversation_id=conversation_id,
-            )
+            context.user_data['system_response'] = system_response
             return
 
         context.user_data["vector_store_loaded"] = True
@@ -697,17 +581,12 @@ class BotHandlers:
         )
 
         # Save event log
-        db_service.save_event_log(
-            user_id=user_id,
-            event_type="command",
-            user_message=user_message,
-            system_response=system_response,
-            conversation_id=conversation_id,
-        )
+        context.user_data['system_response'] = system_response
 
     @authorized_only
     @initialize_services
     @ensure_documents_indexed
+    @log_event(event_type='command')
     async def ask(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the /ask command."""
 
@@ -723,19 +602,14 @@ class BotHandlers:
             db_service = DatabaseService()
             context.user_data["db_service"] = db_service
 
-        db_service.save_event_log(
-            user_id=user_id,
-            event_type="command",
-            user_message=user_message,
-            system_response=system_response,
-            conversation_id=conversation_id,
-        )
+        context.user_data['system_response'] = system_response
 
         return WAITING_FOR_QUESTION
 
     @authorized_only
     @initialize_services
     @ensure_documents_indexed
+    @log_event(event_type='ai_conversation')
     async def ask_question(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         user_prompt = update.message.text
@@ -760,13 +634,7 @@ class BotHandlers:
             system_response = "An error occurred while processing your question. Please try again later."
             await update.message.reply_text(system_response)
             # Save event log
-            db_service.save_event_log(
-                user_id=user_id,
-                event_type="ai_conversation",
-                user_message=user_prompt,
-                system_response=system_response,
-                conversation_id=conversation_id,
-            )
+            context.user_data['system_response'] = system_response
             return ConversationHandler.END
 
         # Prepare the bot's response
@@ -787,19 +655,14 @@ class BotHandlers:
         db_service.save_message(conversation_id, "bot", None, bot_message)
 
         # Save event log
-        db_service.save_event_log(
-            user_id=user_id,
-            event_type="ai_conversation",
-            user_message=user_prompt,
-            system_response=bot_message,
-            conversation_id=conversation_id,
-        )
+        context.user_data['system_response'] = bot_message
 
         return ConversationHandler.END
 
     @authorized_only
     @initialize_services
     @ensure_documents_indexed
+    @log_event(event_type='ai_conversation')
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle any text message sent by the user."""
 
@@ -823,13 +686,7 @@ class BotHandlers:
             system_response = "An error occurred while processing your message. Please try again later."
             await update.message.reply_text(system_response)
             # Save event log
-            db_service.save_event_log(
-                user_id=user_id,
-                event_type="ai_conversation",
-                user_message=user_message,
-                system_response=system_response,
-                conversation_id=conversation_id,
-            )
+            context.user_data['system_response'] = system_response
             return ConversationHandler.END
 
             # Prepare the bot's response
@@ -849,14 +706,7 @@ class BotHandlers:
         # Save the bot's message
         db_service.save_message(conversation_id, "bot", None, bot_message)
 
-        # Save event log
-        db_service.save_event_log(
-            user_id=user_id,
-            event_type="ai_conversation",
-            user_message=user_message,
-            system_response=bot_message,
-            conversation_id=conversation_id,
-        )
+        context.user_data['system_response'] = bot_message
 
     @authorized_only
     @initialize_services
@@ -883,6 +733,7 @@ class BotHandlers:
         else:
             await query.message.reply_text("Unknown command.")
 
+    @log_event(event_type='command')
     async def request_access(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
         user_id = user.id
@@ -903,7 +754,9 @@ class BotHandlers:
         await context.bot.send_message(chat_id=admin_id, text=message)
 
         # Inform the user
-        await update.message.reply_text("Your access request has been sent to the admin.")
+        system_response = "Your access request has been sent to the admin."
+        await update.message.reply_text(system_response)
+        context.user_data['system_response'] = system_response
 
     async def grant_access(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         admin_id = update.effective_user.id
