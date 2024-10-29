@@ -34,4 +34,4 @@ KNOWLEDGE_BASE_PATH = (
     r"G:\Shared drives\NUANU ARCHITECTS\LIB Library\LIB Standards and Regulations"
 )
 
-CHAT_HISTORY_LEVEL=5
+CHAT_HISTORY_LEVEL=10

@@ -15,7 +15,7 @@ from langchain.schema import Document
 from langchain.chains.combine_documents import create_stuff_documents_chain
 import tiktoken
 
-from settings import OPENAI_API_KEY, MODEL_NAME
+from settings import OPENAI_API_KEY, MODEL_NAME, CHAT_HISTORY_LEVEL
 from helpers import current_timestamp
 
 
@@ -85,7 +85,7 @@ class LLMService:
             chat_history = []
 
         # Get the top k relevant documents
-        similar_docs = get_relevant_documents(prompt, k=2)
+        similar_docs = get_relevant_documents(prompt, k=CHAT_HISTORY_LEVEL)
 
         if not similar_docs:
             return "No relevant documents found.", None

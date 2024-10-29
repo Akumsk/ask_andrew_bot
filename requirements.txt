@@ -11,3 +11,5 @@ openpyxl
 tiktoken
 langchain-community
 langchain-openai
+pytest
+pytest-asyncio
