@@ -13,7 +13,6 @@ from helpers import messages_to_langchain_messages
 from auth import AuthService
 
 # Decorators:
-
 def authorized_only(func):
     async def wrapper(self, update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
         user = update.effective_user
@@ -66,6 +65,36 @@ def ensure_documents_indexed(func):
             return ConversationHandler.END
         return await func(self, update, context, *args, **kwargs)
     return wrapper
+
+def log_event(event_type):
+    def decorator(func):
+        async def wrapper(self, update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
+            # Before execution
+            user = update.effective_user
+            user_id = user.id
+            user_message = update.message.text if update.message else ''
+            conversation_id = str(uuid.uuid4())
+
+            # Execute the handler function
+            result = await func(self, update, context, *args, **kwargs)
+
+            # After execution
+            system_response = context.user_data.get('system_response', '')
+            db_service = context.user_data.get('db_service')
+            if db_service:
+                db_service.save_event_log(
+                    user_id=user_id,
+                    event_type=event_type,
+                    user_message=user_message,
+                    system_response=system_response,
+                    conversation_id=conversation_id,
+                )
+            else:
+                logging.error("db_service not found in context.user_data")
+
+            return result
+        return wrapper
+    return decorator
 
 WAITING_FOR_FOLDER_PATH, WAITING_FOR_QUESTION, WAITING_FOR_PROJECT_SELECTION = range(3)
 
