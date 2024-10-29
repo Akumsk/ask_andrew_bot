@@ -15,7 +15,7 @@ from langchain.schema import Document
 from langchain.chains.combine_documents import create_stuff_documents_chain
 import tiktoken
 
-from settings import OPENAI_API_KEY, MODEL_NAME, CHAT_HISTORY_LEVEL
+from settings import OPENAI_API_KEY, MODEL_NAME, CHAT_HISTORY_LEVEL, DOCS_IN_RETRIEVER
 from helpers import current_timestamp
 
 
@@ -85,13 +85,13 @@ class LLMService:
             chat_history = []
 
         # Get the top k relevant documents
-        similar_docs = get_relevant_documents(prompt, k=CHAT_HISTORY_LEVEL)
+#        similar_docs = get_relevant_documents(prompt, k=2)
 
-        if not similar_docs:
-            return "No relevant documents found.", None
+#        if not similar_docs:
+#            return "No relevant documents found.", None
 
         # Create the retriever
-        retriever = LLMService.vector_store.as_retriever()
+        retriever = LLMService.vector_store.as_retriever(search_kwargs={'k': DOCS_IN_RETRIEVER})
 
         # Create the history-aware retriever
         retriever_prompt = ChatPromptTemplate.from_messages(
@@ -139,7 +139,7 @@ class LLMService:
         result = rag_chain.invoke({"input": prompt, "chat_history": chat_history})
 
         answer = result.get("answer", "")
-        sources = similar_docs
+        sources = result.get("context", [])
 
         if not sources:
             return answer, None
