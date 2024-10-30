@@ -4,6 +4,7 @@ import os
 import pandas as pd
 from io import StringIO
 from docx import Document as DocxDocument
+import asyncio
 from langchain.chains.history_aware_retriever import create_history_aware_retriever
 from langchain.chains.retrieval import create_retrieval_chain
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -34,6 +35,37 @@ class LLMService:
     def load_word_file(self, file_path):
         doc = DocxDocument(file_path)
         return "\n".join([para.text for para in doc.paragraphs])
+
+    def build_context(documents, llm):
+        context = ""
+        # Define the prompt template
+        prompt_template = (
+            "Identify the type of document, what tasks this document can be used for, "
+            "do not include specific details.\n\n"
+            "Document Content:\n{document_content}\n\n"
+            "Summary:"
+        )
+
+        # Initialize the prompt
+        template = PromptTemplate(
+            input_variables=["document_content"],
+            template=prompt_template
+        )
+
+        for doc in documents:
+            # Prepare the prompt for this document
+            prompt = template.format(document_content=doc.page_content[:1000])  # Limit content to first 1000 chars
+
+            # Get the description from the LLM
+            description = llm(prompt).strip()
+
+            # Store the description in metadata
+            doc.metadata['generated_description'] = description
+
+            # Build the context by combining descriptions and content
+            context += f"Description: {description}\nContent: {doc.page_content}\n\n"
+
+        return context
 
     def load_and_index_documents(self, folder_path):
         documents = []
