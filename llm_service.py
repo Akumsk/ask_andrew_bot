@@ -4,27 +4,27 @@ import os
 import pandas as pd
 from io import StringIO
 from docx import Document as DocxDocument
+import asyncio
 from langchain.chains.history_aware_retriever import create_history_aware_retriever
 from langchain.chains.retrieval import create_retrieval_chain
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder, PromptTemplate
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_community.document_loaders import PyMuPDFLoader
 from langchain.text_splitter import CharacterTextSplitter
-from langchain.chains import RetrievalQA, ConversationalRetrievalChain
-from langchain.schema import Document, HumanMessage, AIMessage
+from langchain.schema import Document
 from langchain.chains.combine_documents import create_stuff_documents_chain
 import tiktoken
 
-from db_service import DatabaseService
-from settings import OPENAI_API_KEY, MODEL_NAME
+from settings import OPENAI_API_KEY, MODEL_NAME, CHAT_HISTORY_LEVEL, DOCS_IN_RETRIEVER
 from helpers import current_timestamp
 
 
 class LLMService:
+    vector_store = None  # Class variable to store the vector store
     def __init__(self, model_name=MODEL_NAME):
         self.llm = ChatOpenAI(openai_api_key=OPENAI_API_KEY, model_name=model_name)
-        self.vector_store = None
+#        self.vector_store = None
 
     def load_excel_file(self, file_path):
         data = pd.read_excel(file_path)
@@ -35,6 +35,37 @@ class LLMService:
     def load_word_file(self, file_path):
         doc = DocxDocument(file_path)
         return "\n".join([para.text for para in doc.paragraphs])
+
+    def build_context(documents, llm):
+        context = ""
+        # Define the prompt template
+        prompt_template = (
+            "Identify the type of document, what tasks this document can be used for, "
+            "do not include specific details.\n\n"
+            "Document Content:\n{document_content}\n\n"
+            "Summary:"
+        )
+
+        # Initialize the prompt
+        template = PromptTemplate(
+            input_variables=["document_content"],
+            template=prompt_template
+        )
+
+        for doc in documents:
+            # Prepare the prompt for this document
+            prompt = template.format(document_content=doc.page_content[:1000])  # Limit content to first 1000 chars
+
+            # Get the description from the LLM
+            description = llm(prompt).strip()
+
+            # Store the description in metadata
+            doc.metadata['generated_description'] = description
+
+            # Build the context by combining descriptions and content
+            context += f"Description: {description}\nContent: {doc.page_content}\n\n"
+
+        return context
 
     def load_and_index_documents(self, folder_path):
         documents = []
@@ -70,12 +101,12 @@ class LLMService:
         split_docs = text_splitter.split_documents(documents)
 
         embeddings = OpenAIEmbeddings(openai_api_key=OPENAI_API_KEY)
-        self.vector_store = FAISS.from_documents(split_docs, embeddings)
+        LLMService.vector_store = FAISS.from_documents(split_docs, embeddings)
         return "Documents successfully indexed."
 
     def generate_response(self, prompt, chat_history=None):
 
-        if not self.vector_store:
+        if not LLMService.vector_store:
             return (
                 "Please set the folder path using /folder and ensure documents are loaded.",
                 None,
@@ -85,8 +116,14 @@ class LLMService:
         if chat_history is None:
             chat_history = []
 
+        # Get the top k relevant documents
+#        similar_docs = get_relevant_documents(prompt, k=2)
+
+#        if not similar_docs:
+#            return "No relevant documents found.", None
+
         # Create the retriever
-        retriever = self.vector_store.as_retriever()
+        retriever = LLMService.vector_store.as_retriever(search_kwargs={'k': DOCS_IN_RETRIEVER})
 
         # Create the history-aware retriever
         retriever_prompt = ChatPromptTemplate.from_messages(
@@ -104,15 +141,14 @@ class LLMService:
             llm=self.llm, retriever=retriever, prompt=retriever_prompt
         )
 
-
-
         # Create the question-answering chain
         system_prompt = (
-            "You are an project assistant on design and construction project. "
+            "You are a project assistant on design and construction projects. "
             "Use the following pieces of retrieved context to answer "
             "the question. If you don't know the answer, say that you "
-            f"don't know. If you need to use current date, today is {current_timestamp()}"
-            "Do not include references to the source documents in your answer."
+            f"don't know. If you need to use current date, today is {current_timestamp()}."
+            " Do not include references to the source documents in your answer."
+            "If Prompt include request to provide a link to documents in context, respond have to be: Please follow the link below:"
             " \n\n{context}"
         )
 
@@ -187,3 +223,10 @@ class LLMService:
             total_tokens += len(tokenizer.encode(doc.page_content))
 
         return total_tokens
+
+def get_relevant_documents(query, k):
+    if not LLMService.vector_store:
+        return []
+
+    similar_docs = LLMService.vector_store.similarity_search(query, k=k)
+    return similar_docs
