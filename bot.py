@@ -10,7 +10,6 @@ from telegram.ext import (
     CallbackQueryHandler,
 )
 from telegram.error import BadRequest
-from oauth2callback import start_server
 
 from settings import TELEGRAM_TOKEN
 from llm_service import LLMService
@@ -36,7 +35,6 @@ def main():
         ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(handlers.post_init).build()
     )
 
-    # Existing handlers
     folder_conv_handler = ConversationHandler(
         entry_points=[
             CommandHandler("folder", handlers.folder),
@@ -60,13 +58,12 @@ def main():
         fallbacks=[],
     )
 
-    conversation_handler = ConversationHandler(
-        entry_points=[CommandHandler('gdrive_folder', bot_handlers.gdrive_folder)],
+    project_conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("projects", handlers.projects)],
         states={
-            WAITING_FOR_GDRIVE_FOLDER_ID: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, bot_handlers.set_gdrive_folder)
+            WAITING_FOR_PROJECT_SELECTION: [
+                CallbackQueryHandler(handlers.handle_project_selection_callback)
             ],
-            # ... other states
         },
         fallbacks=[],
     )
@@ -83,6 +80,10 @@ def main():
     # Handler for file download
     application.add_handler(CallbackQueryHandler(handlers.send_file, pattern=r'^get_file:'))
 
+    # Handlers for access control
+    application.add_handler(CommandHandler("request_access", handlers.request_access))
+    application.add_handler(CommandHandler("grant_access", handlers.grant_access))
+
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.handle_message)
     )
@@ -93,5 +94,4 @@ def main():
 
 
 if __name__ == "__main__":
-    start_server()
     main()
