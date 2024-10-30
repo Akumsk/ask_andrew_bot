@@ -56,12 +56,3 @@ def current_timestamp():
         + datetime.now().time().strftime("%H:%M:%S")
     )
     return date_time
-
-
-def calculate_percentage_full(token_count, max_tokens):
-    percentage_full = (token_count / max_tokens) * 100 if max_tokens else 0
-    return min(percentage_full, 100)
-
-
-def get_valid_files_in_folder(folder_path, valid_extensions=(".pdf", ".docx", ".xlsx")):
-    return [f for f in os.listdir(folder_path) if f.endswith(valid_extensions)]

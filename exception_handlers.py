@@ -42,8 +42,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("An unexpected error occurred. The support team has been notified.")
 
 def handle_telegram_context_length_exceeded_error(error, user_id, data_context):
-    """Handle context length exceeded errors specifically."""
-    exception_type = type(error).__name__
+    exception_type = "ContextLengthExceededError"
     exception_message = str(error)
     stack_trace = "No stack trace available for context length exceeded."
     occurred_at = datetime.now()

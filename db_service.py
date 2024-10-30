@@ -21,6 +21,8 @@ class DatabaseService:
         self.password = db_password
         self.host = db_host
         self.port = db_port
+        self.conn = self.connect()
+        self.conn.autocommit = True
 
     def connect(self):
         return psycopg2.connect(
@@ -30,7 +32,6 @@ class DatabaseService:
             host=self.host,
             port=self.port,
         )
-
 
     def save_folder(self, user_id, user_name, folder):
         try:
@@ -167,42 +168,38 @@ class DatabaseService:
 
             # Step 1: Get the last 'dialog_numbers' conversation_ids for the user
             query_conversation_ids = """
-                SELECT conversation_id, MAX(timestamp) as last_timestamp
+                SELECT conversation_id, MAX(date + timestamp) as last_datetime
                 FROM messages
                 WHERE user_id = %s AND sender_type = 'user'
                 GROUP BY conversation_id
-                ORDER BY last_timestamp DESC
+                ORDER BY last_datetime DESC
                 LIMIT %s
             """
 
             cursor.execute(query_conversation_ids, (user_id, dialog_numbers))
             conversation_data = cursor.fetchall()
-            conversation_ids = [
-                str(row[0]) for row in conversation_data
-            ]
+            conversation_ids = [str(row[0]) for row in conversation_data]
 
             if not conversation_ids:
                 return []
 
-            # Step 2: Prepare the list of conversation_ids as a string for SQL
-            conversation_ids_str = "{" + ",".join(conversation_ids) + "}"
-
+            # Step 2: Fetch messages for these conversation_ids, ordered by datetime
             query_messages = """
-                SELECT conversation_id, sender_type, message_text, timestamp
+                SELECT conversation_id, sender_type, message_text, date + timestamp as datetime
                 FROM messages
                 WHERE conversation_id = ANY(%s::uuid[])
-                ORDER BY conversation_id, timestamp ASC
+                ORDER BY conversation_id, datetime ASC
             """
-            cursor.execute(query_messages, (conversation_ids_str,))
+            cursor.execute(query_messages, (conversation_ids,))
             messages = cursor.fetchall()
 
             conversations = defaultdict(list)
-            for conversation_id, sender_type, message_text, timestamp in messages:
+            for conversation_id, sender_type, message_text, datetime in messages:
                 conversations[str(conversation_id)].append((sender_type, message_text))
 
-            # Step 4: Construct the chat history
+            # Step 3: Construct the chat history
             chat_history = []
-            # Maintain the order of conversation_ids as per their timestamp descending
+            # Maintain the order of conversation_ids as per their datetime descending
             for conversation_id in conversation_ids:
                 conversation = conversations.get(conversation_id, [])
                 for sender_type, message_text in conversation:
@@ -214,7 +211,8 @@ class DatabaseService:
             return chat_history
 
         except Exception as e:
-            print(f"Error fetching chat history: {e}")
+            # Handle exceptions
+            print(f"An error occurred: {e}")
             return []
         finally:
             if cursor:
@@ -222,9 +220,75 @@ class DatabaseService:
             if connection:
                 connection.close()
 
+    def check_user_access(self, user_id):
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                "SELECT access FROM users WHERE user_id = %s AND is_active = True",
+                (user_id,)
+            )
+            result = cursor.fetchone()
+            if result:
+                return result[0]  # True or False
+            else:
+                return False
+        except Exception as e:
+            print(f"Error checking user access: {e}")
+            return False
+        finally:
+            cursor.close()
 
-# # Instantiate the DatabaseService class
-# db_service = DatabaseService()
-#
-# test_chat_history = db_service.chat_history_from_db(user_id=244732168, dialog_numbers=2)
-# print(test_chat_history)
+    def save_user_info(self, user_id, user_name, language_code):
+        now = datetime.utcnow()
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO users (user_id, user_name, language_code, date_joined, last_active, is_active, access, role)
+                VALUES (%s, %s, %s, %s, %s, True, False, 'user')
+                ON CONFLICT (user_id) DO UPDATE
+                SET user_name = EXCLUDED.user_name,
+                    language_code = EXCLUDED.language_code,
+                    last_active = EXCLUDED.last_active
+                """,
+                (user_id, user_name, language_code, now, now)
+            )
+            print("User info saved/updated successfully.")
+        except Exception as e:
+            print(f"Error saving user info: {e}")
+            self.conn.rollback()
+        finally:
+            cursor.close()
+
+    def update_last_active(self, user_id):
+        now = datetime.utcnow()
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                "UPDATE users SET last_active = %s WHERE user_id = %s",
+                (now, user_id)
+            )
+            print("User last_active updated.")
+        except Exception as e:
+            print(f"Error updating last_active: {e}")
+            self.conn.rollback()
+        finally:
+            cursor.close()
+
+    def grant_access(self, user_id):
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                "UPDATE users SET access = True WHERE user_id = %s",
+                (user_id,)
+            )
+            print(f"Access granted to user {user_id}.")
+        except Exception as e:
+            print(f"Error granting access: {e}")
+            self.conn.rollback()
+        finally:
+            cursor.close()
+
+    def close(self):
+        self.conn.close()
+

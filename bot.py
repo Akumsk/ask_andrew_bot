@@ -36,7 +36,6 @@ def main():
         ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(handlers.post_init).build()
     )
 
-    # Existing handlers
     folder_conv_handler = ConversationHandler(
         entry_points=[
             CommandHandler("folder", handlers.folder),
@@ -82,6 +81,10 @@ def main():
 
     # Handler for file download
     application.add_handler(CallbackQueryHandler(handlers.send_file, pattern=r'^get_file:'))
+
+    # Handlers for access control
+    application.add_handler(CommandHandler("request_access", handlers.request_access))
+    application.add_handler(CommandHandler("grant_access", handlers.grant_access))
 
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.handle_message)
