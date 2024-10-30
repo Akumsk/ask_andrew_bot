@@ -48,6 +48,7 @@ def handle_telegram_context_length_exceeded_error(error, user_id, data_context):
     occurred_at = datetime.now()
     resolved = False
 
+    # Log the exception to the database
     db_service.log_exception(
         exception_type=exception_type,
         exception_message=exception_message,
