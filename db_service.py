@@ -33,6 +33,113 @@ class DatabaseService:
             port=self.port,
         )
 
+    def save_metadata(self, metadata_list):
+        try:
+            connection = self.connect()
+            cursor = connection.cursor()
+
+            insert_query = """
+                INSERT INTO documents (filename, path_file, document_type, date_modified, date_of_analysis, description, deleted)
+                VALUES (%s, %s, %s, %s, %s, %s, FALSE)
+                ON CONFLICT (path_file) DO UPDATE
+                SET
+                    filename = EXCLUDED.filename,
+                    document_type = EXCLUDED.document_type,
+                    date_modified = EXCLUDED.date_modified,
+                    date_of_analysis = EXCLUDED.date_of_analysis,
+                    description = EXCLUDED.description,
+                    deleted = FALSE
+            """
+
+            for item in metadata_list:
+                # Convert date_modified from string to datetime object
+                date_modified = datetime.strptime(item['date_modified'], '%Y-%m-%d %H:%M:%S')
+                date_of_analysis = datetime.utcnow()  # Current timestamp for analysis time
+
+                cursor.execute(insert_query, (
+                    item['filename'],
+                    item['path_file'],
+                    item['document_type'],
+                    date_modified,
+                    date_of_analysis,
+                    item['description']
+                ))
+
+            connection.commit()
+            print("Metadata saved successfully.")
+
+        except Exception as e:
+            print(f"Error saving metadata: {e}")
+            connection.rollback()
+        finally:
+            cursor.close()
+            connection.close()
+
+    def mark_files_as_deleted(self, existing_file_paths):
+        try:
+            connection = self.connect()
+            cursor = connection.cursor()
+
+            # Get all files in the database that are not in existing_file_paths
+            query = """
+                UPDATE documents
+                SET deleted = TRUE
+                WHERE path_file NOT IN %s AND deleted = FALSE
+            """
+            cursor.execute(query, (tuple(existing_file_paths),))
+
+            connection.commit()
+            print("Marked missing files as deleted.")
+
+        except Exception as e:
+            print(f"Error marking files as deleted: {e}")
+            connection.rollback()
+        finally:
+            cursor.close()
+            connection.close()
+
+    def get_file_dates(self, path_file):
+        try:
+            connection = self.connect()
+            cursor = connection.cursor()
+            query = """
+                SELECT date_modified, date_of_analysis FROM documents
+                WHERE path_file = %s
+            """
+            cursor.execute(query, (path_file,))
+            result = cursor.fetchone()
+            if result:
+                db_date_modified = result[0]  # date_modified from database
+                date_of_analysis = result[1]  # date_of_analysis from database
+                return db_date_modified, date_of_analysis
+            else:
+                return None, None
+        except Exception as e:
+            print(f"Error getting dates for file {path_file}: {e}")
+            return None, None
+        finally:
+            cursor.close()
+            connection.close()
+
+    def get_all_file_paths(self):
+        try:
+            connection = self.connect()
+            cursor = connection.cursor()
+            query = """
+                SELECT path_file FROM documents
+                WHERE deleted = FALSE
+            """
+            cursor.execute(query)
+            results = cursor.fetchall()
+            file_paths = [row[0] for row in results]
+            return file_paths
+        except Exception as e:
+            print(f"Error retrieving file paths: {e}")
+            return []
+        finally:
+            cursor.close()
+            connection.close()
+
     def save_folder(self, user_id, user_name, folder):
         try:
             connection = self.connect()

@@ -5,8 +5,10 @@ import pandas as pd
 from io import StringIO
 from docx import Document as DocxDocument
 import asyncio
+import datetime
 from langchain.chains.history_aware_retriever import create_history_aware_retriever
 from langchain.chains.retrieval import create_retrieval_chain
+from langchain_core.messages import HumanMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder, PromptTemplate
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_community.vectorstores import FAISS
@@ -15,7 +17,9 @@ from langchain.text_splitter import CharacterTextSplitter
 from langchain.schema import Document
 from langchain.chains.combine_documents import create_stuff_documents_chain
 import tiktoken
+from pymupdf.mupdf import ll_pdf_lookup_substitute_font_outparams
 
+from db_service import DatabaseService
 from settings import OPENAI_API_KEY, MODEL_NAME, CHAT_HISTORY_LEVEL, DOCS_IN_RETRIEVER
 from helpers import current_timestamp
 
@@ -36,36 +40,91 @@ class LLMService:
         doc = DocxDocument(file_path)
         return "\n".join([para.text for para in doc.paragraphs])
 
-    def build_context(documents, llm):
-        context = ""
-        # Define the prompt template
-        prompt_template = (
-            "Identify the type of document, what tasks this document can be used for, "
-            "do not include specific details.\n\n"
-            "Document Content:\n{document_content}\n\n"
-            "Summary:"
-        )
 
-        # Initialize the prompt
-        template = PromptTemplate(
-            input_variables=["document_content"],
-            template=prompt_template
-        )
+    def get_metadata(self, folder_path, db_service):
+        from langchain.schema import HumanMessage
+        metadata_list = []
+        existing_file_paths = []
 
-        for doc in documents:
-            # Prepare the prompt for this document
-            prompt = template.format(document_content=doc.page_content[:1000])  # Limit content to first 1000 chars
+        for filename in os.listdir(folder_path):
+            file_path = os.path.join(folder_path, filename)
 
-            # Get the description from the LLM
-            description = llm(prompt).strip()
+            # Skip directories
+            if os.path.isdir(file_path):
+                continue
 
-            # Store the description in metadata
-            doc.metadata['generated_description'] = description
+            # Get the last modified time of the file from filesystem
+            timestamp = os.path.getmtime(file_path)
+            file_date_modified = datetime.datetime.fromtimestamp(timestamp)
+            date_modify_str = file_date_modified.strftime('%Y-%m-%d %H:%M:%S')
 
-            # Build the context by combining descriptions and content
-            context += f"Description: {description}\nContent: {doc.page_content}\n\n"
+            # Get dates from database
+            db_date_modified, date_of_analysis = db_service.get_file_dates(file_path)
 
-        return context
+            if date_of_analysis:
+                # Compare file's date_modified with date_of_analysis
+                if file_date_modified <= date_of_analysis:
+                    # File has not been modified since last analysis; skip processing
+                    print(f"Skipping {filename}; no changes detected.")
+                    continue
+                else:
+                    print(f"Re-analyzing {filename}; file has been modified.")
+            else:
+                print(f"Analyzing new file: {filename}")
+
+            # Load content based on file type
+            if filename.endswith(".pdf"):
+                loader = PyMuPDFLoader(file_path)
+                docs = loader.load()
+                content = ' '.join([doc.page_content for doc in docs])
+
+            elif filename.endswith(".docx"):
+                content = self.load_word_file(file_path)
+
+            elif filename.endswith(".xlsx"):
+                content = self.load_excel_file(file_path)
+
+            else:
+                continue  # Skip unsupported file types
+
+            # Limit content to first 2000 characters to avoid long prompts
+            content_sample = content[:2000]
+
+            # Generate AI description and document type
+            prompt = (
+                "Please analyze the following document content and provide the document type and a brief description in the following format:\n\n"
+                "Document Type: [document type]\n"
+                "Description: [description]\n\n"
+                "Content:\n"
+                f"{content_sample}"
+            )
+
+            response = self.llm.invoke([HumanMessage(content=prompt)]).content
+
+            # Extract description and document type from response
+            document_type = ''
+            description = ''
+            lines = response.strip().split('\n')
+            for line in lines:
+                if line.lower().startswith('document type:'):
+                    document_type = line[len('document type:'):].strip()
+                elif line.lower().startswith('description:'):
+                    description = line[len('description:'):].strip()
+
+            # Append metadata as a dictionary to the list
+            metadata_list.append({
+                'filename': filename,
+                'path_file': file_path,
+                'document_type': document_type,
+                'date_modified': date_modify_str,
+                'description': description
+            })
+
+            # After processing all files, mark files as deleted if they are not in the folder
+            db_service.mark_files_as_deleted(existing_file_paths)
+
+        return metadata_list
+
 
     def load_and_index_documents(self, folder_path):
         documents = []
@@ -116,13 +175,7 @@ class LLMService:
         if chat_history is None:
             chat_history = []
 
-        # Get the top k relevant documents
-#        similar_docs = get_relevant_documents(prompt, k=2)
-
-#        if not similar_docs:
-#            return "No relevant documents found.", None
-
-        # Create the retriever
+        # Create the retriever with k=
         retriever = LLMService.vector_store.as_retriever(search_kwargs={'k': DOCS_IN_RETRIEVER})
 
         # Create the history-aware retriever
@@ -143,7 +196,7 @@ class LLMService:
 
         # Create the question-answering chain
         system_prompt = (
-            "You are a project assistant on design and construction projects. "
+            "You are a project assistant from consultant side on design and construction projects."
             "Use the following pieces of retrieved context to answer "
             "the question. If you don't know the answer, say that you "
             f"don't know. If you need to use current date, today is {current_timestamp()}."
@@ -224,9 +277,13 @@ class LLMService:
 
         return total_tokens
 
-def get_relevant_documents(query, k):
-    if not LLMService.vector_store:
-        return []
-
-    similar_docs = LLMService.vector_store.similarity_search(query, k=k)
-    return similar_docs
+llm = LLMService()
+db = DatabaseService()
+folder_path = r"G:\Shared drives\ARC.HITENSE\ARC.ORI Origins\ARC.ORI.D Docs\Tracked documents"
+meta_data = llm.get_metadata(folder_path, db)
+# Save metadata to PostgreSQL
+if meta_data:
+    db.save_metadata(meta_data)
+else:
+    print("No new or modified files to process.")
+print(meta_data)

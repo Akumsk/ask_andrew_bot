@@ -10,7 +10,7 @@ from settings import PROJECT_PATHS, MAX_TOKENS_IN_CONTEXT, KNOWLEDGE_BASE_PATH, 
 from db_service import DatabaseService
 from llm_service import LLMService
 from helpers import messages_to_langchain_messages
-from auth import AuthService
+from auth.auth import AuthService
 
 # Decorators:
 def authorized_only(func):
