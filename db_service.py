@@ -80,13 +80,28 @@ class DatabaseService:
             connection = self.connect()
             cursor = connection.cursor()
 
-            # Get all files in the database that are not in existing_file_paths
-            query = """
-                UPDATE documents
-                SET deleted = TRUE
-                WHERE path_file NOT IN %s AND deleted = FALSE
-            """
-            cursor.execute(query, (tuple(existing_file_paths),))
+            if existing_file_paths:
+                # When there are existing files, mark files not in the list as deleted
+                # Convert list to tuple
+                existing_file_paths_tuple = tuple(existing_file_paths)
+                # If there's only one element, make sure it's a tuple
+                if len(existing_file_paths_tuple) == 1:
+                    existing_file_paths_tuple = (existing_file_paths_tuple[0],)
+
+                query = """
+                    UPDATE documents
+                    SET deleted = TRUE
+                    WHERE path_file NOT IN %s AND deleted = FALSE
+                """
+                cursor.execute(query, (existing_file_paths_tuple,))
+            else:
+                # When there are no existing files, mark all files as deleted
+                query = """
+                    UPDATE documents
+                    SET deleted = TRUE
+                    WHERE deleted = FALSE
+                """
+                cursor.execute(query)
 
             connection.commit()
             print("Marked missing files as deleted.")
