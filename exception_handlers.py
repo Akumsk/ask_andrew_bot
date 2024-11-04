@@ -2,6 +2,8 @@
 import os
 import logging
 import traceback  # Added missing import
+import uuid
+
 from telegram import Update
 from telegram.ext import ContextTypes
 
@@ -25,6 +27,8 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id if update and update.effective_user else None
     data_context = str(update.to_dict()) if update else "No update available"
     resolved = False
+
+    exception_id = str(uuid.uuid4())  # Generate a unique exception ID
 
     # Log the exception to the database
     db_service.log_exception(

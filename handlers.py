@@ -357,11 +357,16 @@ class BotHandlers:
             bot_message = f"{response}\n\nReferences:"
 
             if source_files:
-                # Create buttons for each source file
-                keyboard = [
-                    [InlineKeyboardButton(file, callback_data=f"get_file:{file}")]
-                    for file in source_files
-                ]
+                # Initialize or retrieve the file ID mapping
+                file_id_mapping = context.user_data.get('file_id_mapping', {})
+                keyboard = []
+                for file in source_files:
+                    # Generate a short unique ID
+                    file_id = str(uuid.uuid4())[:8]
+                    file_id_mapping[file_id] = file
+                    keyboard.append([InlineKeyboardButton(file, callback_data=f"get_file:{file_id}")])
+
+                context.user_data['file_id_mapping'] = file_id_mapping
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 await query.message.reply_text(bot_message, reply_markup=reply_markup)
             else:
@@ -693,11 +698,16 @@ class BotHandlers:
         bot_message = f"{response}\n\nReferences:"
 
         if source_files:
-            # Create buttons for each source file
-            keyboard = [
-                [InlineKeyboardButton(file, callback_data=f"get_file:{file}")]
-                for file in source_files
-            ]
+            # Initialize or retrieve the file ID mapping
+            file_id_mapping = context.user_data.get('file_id_mapping', {})
+            keyboard = []
+            for file in source_files:
+                # Generate a short unique ID
+                file_id = str(uuid.uuid4())[:8]
+                file_id_mapping[file_id] = file
+                keyboard.append([InlineKeyboardButton(file, callback_data=f"get_file:{file_id}")])
+
+            context.user_data['file_id_mapping'] = file_id_mapping
             reply_markup = InlineKeyboardMarkup(keyboard)
             await update.message.reply_text(bot_message, reply_markup=reply_markup)
         else:
@@ -715,7 +725,12 @@ class BotHandlers:
         await query.answer()
         data = query.data
         if data.startswith("get_file:"):
-            file_name = data[len("get_file:"):]
+            file_id = data[len("get_file:"):]
+            file_id_mapping = context.user_data.get('file_id_mapping', {})
+            file_name = file_id_mapping.get(file_id)
+            if not file_name:
+                await query.message.reply_text("File not found.")
+                return
             folder_path = context.user_data.get("folder_path")
             if folder_path:
                 file_path = os.path.join(folder_path, file_name)

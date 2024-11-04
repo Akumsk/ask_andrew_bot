@@ -40,7 +40,6 @@ class LLMService:
         doc = DocxDocument(file_path)
         return "\n".join([para.text for para in doc.paragraphs])
 
-
     def get_metadata(self, folder_path, db_service):
         from langchain.schema import HumanMessage
         metadata_list = []
@@ -52,6 +51,9 @@ class LLMService:
             # Skip directories
             if os.path.isdir(file_path):
                 continue
+
+            # Append the file path to existing_file_paths
+            existing_file_paths.append(file_path)
 
             # Get the last modified time of the file from filesystem
             timestamp = os.path.getmtime(file_path)
@@ -120,8 +122,9 @@ class LLMService:
                 'description': description
             })
 
-            # After processing all files, mark files as deleted if they are not in the folder
-            db_service.mark_files_as_deleted(existing_file_paths)
+        # After processing all files, mark files as deleted if they are not in the folder
+        db_service.mark_files_as_deleted(existing_file_paths)
+        print("Existing File Paths:", existing_file_paths)
 
         return metadata_list
 

@@ -81,21 +81,29 @@ class DatabaseService:
             cursor = connection.cursor()
 
             if existing_file_paths:
-                # When there are existing files, mark files not in the list as deleted
-                # Convert list to tuple
+                # Convert list to tuple for SQL IN clause
                 existing_file_paths_tuple = tuple(existing_file_paths)
-                # If there's only one element, make sure it's a tuple
                 if len(existing_file_paths_tuple) == 1:
                     existing_file_paths_tuple = (existing_file_paths_tuple[0],)
 
-                query = """
+                # Set deleted = FALSE for existing files
+                query_set_false = """
+                    UPDATE documents
+                    SET deleted = FALSE
+                    WHERE path_file IN %s AND deleted = TRUE
+                """
+                cursor.execute(query_set_false, (existing_file_paths_tuple,))
+
+                # Set deleted = TRUE for missing files
+                query_set_true = """
                     UPDATE documents
                     SET deleted = TRUE
                     WHERE path_file NOT IN %s AND deleted = FALSE
                 """
-                cursor.execute(query, (existing_file_paths_tuple,))
+                cursor.execute(query_set_true, (existing_file_paths_tuple,))
+
             else:
-                # When there are no existing files, mark all files as deleted
+                # No existing files; mark all as deleted
                 query = """
                     UPDATE documents
                     SET deleted = TRUE
@@ -104,10 +112,10 @@ class DatabaseService:
                 cursor.execute(query)
 
             connection.commit()
-            print("Marked missing files as deleted.")
+            print("Updated deleted status of files based on current file system.")
 
         except Exception as e:
-            print(f"Error marking files as deleted: {e}")
+            print(f"Error updating deleted status of files: {e}")
             connection.rollback()
         finally:
             cursor.close()
