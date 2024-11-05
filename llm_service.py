@@ -140,7 +140,7 @@ class LLMService:
                 loader = PyMuPDFLoader(file_path)
                 docs = loader.load()
                 for doc in docs:
-                    doc.metadata["source"] = filename
+                    doc.metadata = {"source": filename}
                     documents.append(doc)
                 found_valid_file = True
 
@@ -232,12 +232,9 @@ class LLMService:
         if not sources:
             return answer, None
 
-        source_files = []
-        for doc in sources:
-            if "source" in doc.metadata:
-                source = doc.metadata["source"]
-                page = doc.metadata.get("page", None)
-                source_files.append({'filename': source, 'page': page})
+        source_files = set(
+            [doc.metadata["source"] for doc in sources if "source" in doc.metadata]
+        )
 
         return answer, source_files
 
@@ -283,3 +280,13 @@ class LLMService:
 
         return total_tokens
 
+llm = LLMService()
+db = DatabaseService()
+folder_path = r"G:\Shared drives\ARC.HITENSE\ARC.ORI Origins\ARC.ORI.D Docs\Tracked documents"
+meta_data = llm.get_metadata(folder_path, db)
+# Save metadata to PostgreSQL
+if meta_data:
+    db.save_metadata(meta_data)
+else:
+    print("No new or modified files to process.")
+print(meta_data)
