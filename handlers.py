@@ -5,6 +5,8 @@ import os
 import uuid
 from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
+import fitz
+import tempfile
 
 from settings import PROJECT_PATHS, MAX_TOKENS_IN_CONTEXT, KNOWLEDGE_BASE_PATH, CHAT_HISTORY_LEVEL, FOLLOWING_QUESTIONS
 from db_service import DatabaseService
@@ -159,6 +161,14 @@ class BotHandlers:
 
                 context.user_data["vector_store_loaded"] = True
 
+                # Get Metadata
+                meta_data = llm_service.get_metadata(last_folder, db_service)
+                # Save metadata to PostgreSQL
+                if meta_data:
+                    db_service.save_metadata(meta_data)
+                else:
+                    print("No new or modified files to process.")
+
                 # Evaluate token count
                 token_count = llm_service.count_tokens_in_context(last_folder)
                 percentage_full = (
@@ -244,6 +254,14 @@ class BotHandlers:
         folder_path = PROJECT_PATHS.get(user_choice)
 
         if folder_path:
+            # Get Metadata
+            meta_data = llm_service.get_metadata(folder_path, db_service)
+            # Save metadata to PostgreSQL
+            if meta_data:
+                db_service.save_metadata(meta_data)
+            else:
+                print("No new or modified files to process.")
+
             # Check if the folder path exists
             if not os.path.isdir(folder_path):
                 system_response = "The selected project's folder path does not exist."
@@ -364,7 +382,8 @@ class BotHandlers:
                     # Generate a short unique ID
                     file_id = str(uuid.uuid4())[:8]
                     file_id_mapping[file_id] = file
-                    keyboard.append([InlineKeyboardButton(file, callback_data=f"get_file:{file_id}")])
+                    filename = file['filename']
+                    keyboard.append([InlineKeyboardButton(filename, callback_data=f"get_file:{file_id}")])
 
                 context.user_data['file_id_mapping'] = file_id_mapping
                 reply_markup = InlineKeyboardMarkup(keyboard)
@@ -567,6 +586,14 @@ class BotHandlers:
 
         context.user_data["vector_store_loaded"] = True
 
+        # Get Metadata
+        meta_data = llm_service.get_metadata(folder_path, db_service)
+        # Save metadata to PostgreSQL
+        if meta_data:
+            db_service.save_metadata(meta_data)
+        else:
+            print("No new or modified files to process.")
+
         # Evaluate token count
         token_count = llm_service.count_tokens_in_context(folder_path)
         percentage_full = (
@@ -694,18 +721,21 @@ class BotHandlers:
             context.user_data['system_response'] = system_response
             return ConversationHandler.END
 
-            # Prepare the bot's response
+        # Prepare the bot's response
         bot_message = f"{response}\n\nReferences:"
 
         if source_files:
             # Initialize or retrieve the file ID mapping
             file_id_mapping = context.user_data.get('file_id_mapping', {})
             keyboard = []
-            for file in source_files:
+            for source in source_files:
+                filename = source['filename']
+                page = source['page']
                 # Generate a short unique ID
                 file_id = str(uuid.uuid4())[:8]
-                file_id_mapping[file_id] = file
-                keyboard.append([InlineKeyboardButton(file, callback_data=f"get_file:{file_id}")])
+                file_id_mapping[file_id] = source
+                button_text = f"{filename} (Page {page})" if page else filename
+                keyboard.append([InlineKeyboardButton(button_text, callback_data=f"get_file:{file_id}")])
 
             context.user_data['file_id_mapping'] = file_id_mapping
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -727,19 +757,54 @@ class BotHandlers:
         if data.startswith("get_file:"):
             file_id = data[len("get_file:"):]
             file_id_mapping = context.user_data.get('file_id_mapping', {})
-            file_name = file_id_mapping.get(file_id)
-            if not file_name:
+            source = file_id_mapping.get(file_id)
+            if not source:
                 await query.message.reply_text("File not found.")
                 return
+
+            filename = source['filename']
+            page = source.get('page', None)
             folder_path = context.user_data.get("folder_path")
+
             if folder_path:
-                file_path = os.path.join(folder_path, file_name)
+                file_path = os.path.join(folder_path, filename)
                 if os.path.isfile(file_path):
                     try:
-                        with open(file_path, 'rb') as f:
-                            await query.message.reply_document(document=f, filename=file_name)
+                        if filename.lower().endswith('.pdf') and page is not None:
+                            # Extract the page and send it
+                            doc = fitz.open(file_path)
+                            page_number = int(page)
+
+                            pdf_writer = fitz.open()
+                            pdf_writer.insert_pdf(doc, from_page=page_number - 1, to_page=page_number - 1)
+
+                            # Close the original document
+                            doc.close()
+
+                            # Use mkstemp to create a temp file
+                            fd, temp_pdf_path = tempfile.mkstemp(suffix='.pdf')
+                            os.close(fd)  # Close the file descriptor
+
+                            pdf_writer.save(temp_pdf_path)
+                            pdf_writer.close()
+
+                            # Sanitize the filename for the sent file
+                            base_filename = os.path.splitext(filename)[0]
+                            temp_filename = f"{base_filename}_page_{page_number}.pdf"
+
+                            with open(temp_pdf_path, 'rb') as f:
+                                await query.message.reply_document(document=f, filename=temp_filename)
+
+                            # Delete the temp file
+                            os.remove(temp_pdf_path)
+                        else:
+                            # Send the whole file
+                            with open(file_path, 'rb') as f:
+                                await query.message.reply_document(document=f, filename=filename)
+                            if page:
+                                await query.message.reply_text(f"Please refer to page {page}.")
                     except Exception as e:
-                        logging.error(f"Error sending file: {e}")
+                        logging.error(f"Error sending file: {e}", exc_info=True)
                         await query.message.reply_text("An error occurred while sending the file.")
                 else:
                     await query.message.reply_text("File not found.")
