@@ -280,13 +280,13 @@ class LLMService:
 
         return total_tokens
 
-llm = LLMService()
-db = DatabaseService()
-folder_path = r"G:\Shared drives\ARC.HITENSE\ARC.ORI Origins\ARC.ORI.D Docs\Tracked documents"
-meta_data = llm.get_metadata(folder_path, db)
-# Save metadata to PostgreSQL
-if meta_data:
-    db.save_metadata(meta_data)
-else:
-    print("No new or modified files to process.")
-print(meta_data)
+# llm = LLMService()
+# db = DatabaseService()
+# folder_path = r"G:\Shared drives\ARC.HITENSE\ARC.ORI Origins\ARC.ORI.D Docs\Tracked documents"
+# meta_data = llm.get_metadata(folder_path, db)
+# # Save metadata to PostgreSQL
+# if meta_data:
+#     db.save_metadata(meta_data)
+# else:
+#     print("No new or modified files to process.")
+# print(meta_data)
