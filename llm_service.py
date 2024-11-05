@@ -137,7 +137,7 @@ class LLMService:
                 loader = PyMuPDFLoader(file_path)
                 docs = loader.load()
                 for doc in docs:
-                    doc.metadata = {"source": filename}
+                    doc.metadata["source"] = filename
                     documents.append(doc)
                 found_valid_file = True
 
@@ -199,8 +199,8 @@ class LLMService:
             "You are a project assistant from consultant side on design and construction projects."
             "Use the following pieces of retrieved context to answer "
             "the question. If you don't know the answer, say that you "
-            f"don't know. If you need to use current date, today is {current_timestamp()}."
             " Do not include references to the source documents in your answer."
+            f"don't know. If you need to use current date, today is {current_timestamp()}."
             "If Prompt include request to provide a link to documents in context, respond have to be: Please follow the link below:"
             " \n\n{context}"
         )
@@ -226,12 +226,22 @@ class LLMService:
         answer = result.get("answer", "")
         sources = result.get("context", [])
 
+
         if not sources:
             return answer, None
 
         source_files = set(
             [doc.metadata["source"] for doc in sources if "source" in doc.metadata]
         )
+
+        # Build the references
+        references = {}
+        for doc in sources:
+            filename = doc.metadata.get('source', 'Unknown')
+            page = doc.metadata.get('page', 'Unknown')
+            if filename not in references:
+                references[filename] = set()
+            references[filename].add(page)
 
         return answer, source_files
 
@@ -277,13 +287,3 @@ class LLMService:
 
         return total_tokens
 
-llm = LLMService()
-db = DatabaseService()
-folder_path = r"G:\Shared drives\ARC.HITENSE\ARC.ORI Origins\ARC.ORI.D Docs\Tracked documents"
-meta_data = llm.get_metadata(folder_path, db)
-# Save metadata to PostgreSQL
-if meta_data:
-    db.save_metadata(meta_data)
-else:
-    print("No new or modified files to process.")
-print(meta_data)
