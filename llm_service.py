@@ -140,7 +140,7 @@ class LLMService:
                 loader = PyMuPDFLoader(file_path)
                 docs = loader.load()
                 for doc in docs:
-                    doc.metadata = {"source": filename}
+                    doc.metadata["source"] = filename
                     documents.append(doc)
                 found_valid_file = True
 
@@ -236,7 +236,23 @@ class LLMService:
             [doc.metadata["source"] for doc in sources if "source" in doc.metadata]
         )
 
-        return answer, source_files
+        # Build the references
+        references = {}
+        for doc in sources:
+            filename = doc.metadata.get('source', 'Unknown')
+            page = doc.metadata.get('page', 'Unknown')
+            if filename not in references:
+                references[filename] = set()
+            references[filename].add(page)
+
+        answer_with_references = answer + "\n\n------------------" + "\nReferences:\n"
+
+        for doc_name, pages in references.items():
+            pages_list = sorted(pages)
+            pages_str = ', '.join(str(page) for page in pages_list)
+            answer_with_references += f"{doc_name}, pages: {pages_str}\n"
+
+        return answer_with_references, source_files
 
     def count_tokens_in_context(self, folder_path):
         """Counts the total number of tokens in documents within a folder."""

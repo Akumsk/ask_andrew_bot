@@ -695,7 +695,7 @@ class BotHandlers:
             return ConversationHandler.END
 
             # Prepare the bot's response
-        bot_message = f"{response}\n\nReferences:"
+        bot_message = f"{response}"
 
         if source_files:
             # Initialize or retrieve the file ID mapping
