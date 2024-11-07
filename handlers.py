@@ -9,7 +9,7 @@ from telegram.ext import ContextTypes, ConversationHandler
 from settings import PROJECT_PATHS, MAX_TOKENS_IN_CONTEXT, KNOWLEDGE_BASE_PATH, CHAT_HISTORY_LEVEL, FOLLOWING_QUESTIONS
 from db_service import DatabaseService
 from llm_service import LLMService
-from helpers import messages_to_langchain_messages
+from helpers import messages_to_langchain_messages, send_formatted_message, escape_markdown_v2
 from auth.auth import AuthService
 
 # Decorators:
@@ -689,7 +689,7 @@ class BotHandlers:
         except Exception as e:
             logging.error(f"Error during generate_response: {e}")
             system_response = "An error occurred while processing your message. Please try again later."
-            await update.message.reply_text(system_response)
+            await send_formatted_message(update, context, system_response, parse_mode='MarkdownV2')
             # Save event log
             context.user_data['system_response'] = system_response
             return ConversationHandler.END
@@ -709,9 +709,9 @@ class BotHandlers:
 
             context.user_data['file_id_mapping'] = file_id_mapping
             reply_markup = InlineKeyboardMarkup(keyboard)
-            await update.message.reply_text(bot_message, reply_markup=reply_markup)
+            await send_formatted_message(update, context, bot_message, reply_markup=reply_markup, parse_mode='MarkdownV2')
         else:
-            await update.message.reply_text(response)
+            await send_formatted_message(update, context, response, parse_mode='MarkdownV2')
 
         # Save the bot's message
         db_service.save_message(conversation_id, "bot", None, bot_message)

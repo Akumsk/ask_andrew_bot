@@ -14,7 +14,6 @@ from db_service import DatabaseService
 # Initialize the DatabaseService
 db_service = DatabaseService()
 
-exception_id = str(uuid.uuid4())
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Log the error and send a message to notify the developer."""
@@ -30,11 +29,9 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data_context = str(update.to_dict()) if update else "No update available"
     resolved = False
 
-    exception_id = str(uuid.uuid4())
 
     # Log the exception to the database (include exception_id)
     db_service.log_exception(
-        exception_id=exception_id,
         exception_type=exception_type,
         exception_message=exception_message,
         stack_trace=stack_trace,
